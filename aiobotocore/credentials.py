@@ -284,6 +284,7 @@ class RefreshableCredentials(Credentials):
     # The time at which all threads will block waiting for
     # refreshed credentials.
     _mandatory_refresh_timeout = 10 * 60
+    _refresh_task_period = 1 * 60
 
     def __init__(self, access_key, secret_key, token,
                  expiry_time, refresh_using, method,
@@ -299,7 +300,7 @@ class RefreshableCredentials(Credentials):
         self._frozen_credentials = ReadOnlyCredentials(
             access_key, secret_key, token)
         self._normalize()
-        self._refresh_task = PeriodicTask(self._refresh, 60)
+        self._refresh_task = PeriodicTask(self._refresh, self._refresh_task_period, loop=self._loop)
 
     def _normalize(self):
         self._access_key = botocore.compat.ensure_unicode(self._access_key)
@@ -490,16 +491,17 @@ class DeferredRefreshableCredentials(RefreshableCredentials):
 
     refresh_using will be called upon first access.
     """
-    def __init__(self, refresh_using, method, time_fetcher=_local_now):
+    def __init__(self, refresh_using, method, time_fetcher=_local_now, loop=None):
         self._refresh_using = refresh_using
         self._access_key = None
         self._secret_key = None
         self._token = None
         self._expiry_time = None
         self._time_fetcher = time_fetcher
-        self._refresh_lock = threading.Lock()
+        self._loop = loop or asyncio.get_event_loop()
         self.method = method
         self._frozen_credentials = None
+        self._refresh_task = PeriodicTask(self._refresh, self._refresh_task_period, loop=self._loop)
 
     def refresh_needed(self, refresh_in=None):
         if self._frozen_credentials is None:
