@@ -23,6 +23,7 @@ from collections import namedtuple
 from copy import deepcopy
 from hashlib import sha1
 import json
+import asyncio
 
 from dateutil.parser import parse
 from dateutil.tz import tzlocal
@@ -39,8 +40,9 @@ from botocore.exceptions import InfiniteLoopConfigError
 from botocore.exceptions import RefreshWithMFAUnsupportedError
 from botocore.exceptions import MetadataRetrievalError
 from botocore.exceptions import CredentialRetrievalError
-from botocore.utils import InstanceMetadataFetcher, parse_key_val_file
-from botocore.utils import ContainerMetadataFetcher
+from botocore.utils import parse_key_val_file
+from .utils import ContainerMetadataFetcher, InstanceMetadataFetcher
+from .utils import PeriodicTask
 
 
 logger = logging.getLogger(__name__)
@@ -297,6 +299,7 @@ class RefreshableCredentials(Credentials):
         self._frozen_credentials = ReadOnlyCredentials(
             access_key, secret_key, token)
         self._normalize()
+        self._refresh_task = PeriodicTask(self._refresh, 60)
 
     def _normalize(self):
         self._access_key = botocore.compat.ensure_unicode(self._access_key)
@@ -320,7 +323,6 @@ class RefreshableCredentials(Credentials):
         access another property subsequently along the refresh boundary.
         Please use get_frozen_credentials instead.
         """
-        self._refresh()
         return self._access_key
 
     @access_key.setter
@@ -333,7 +335,6 @@ class RefreshableCredentials(Credentials):
         access another property subsequently along the refresh boundary.
         Please use get_frozen_credentials instead.
         """
-        self._refresh()
         return self._secret_key
 
     @secret_key.setter
@@ -346,7 +347,6 @@ class RefreshableCredentials(Credentials):
         access another property subsequently along the refresh boundary.
         Please use get_frozen_credentials instead.
         """
-        self._refresh()
         return self._token
 
     @token.setter
@@ -395,40 +395,18 @@ class RefreshableCredentials(Credentials):
         # Checks if the current credentials are expired.
         return self.refresh_needed(refresh_in=0)
 
-    def _refresh(self):
-        # In the common case where we don't need a refresh, we
-        # can immediately exit and not require acquiring the
-        # refresh lock.
+    async def _refresh(self):
         if not self.refresh_needed(self._advisory_refresh_timeout):
             return
+        is_mandatory_refresh = self.refresh_needed(
+            self._mandatory_refresh_timeout)
+        await self._protected_refresh(is_mandatory=is_mandatory_refresh)
 
-        # acquire() doesn't accept kwargs, but False is indicating
-        # that we should not block if we can't acquire the lock.
-        # If we aren't able to acquire the lock, we'll trigger
-        # the else clause.
-        if self._refresh_lock.acquire(False):
-            try:
-                if not self.refresh_needed(self._advisory_refresh_timeout):
-                    return
-                is_mandatory_refresh = self.refresh_needed(
-                    self._mandatory_refresh_timeout)
-                self._protected_refresh(is_mandatory=is_mandatory_refresh)
-                return
-            finally:
-                self._refresh_lock.release()
-        elif self.refresh_needed(self._mandatory_refresh_timeout):
-            # If we're within the mandatory refresh window,
-            # we must block until we get refreshed credentials.
-            with self._refresh_lock:
-                if not self.refresh_needed(self._mandatory_refresh_timeout):
-                    return
-                self._protected_refresh(is_mandatory=True)
-
-    def _protected_refresh(self, is_mandatory):
+    async def _protected_refresh(self, is_mandatory):
         # precondition: this method should only be called if you've acquired
         # the self._refresh_lock.
         try:
-            metadata = self._refresh_using()
+            metadata = await self._refresh_using()
         except Exception as e:
             period_name = 'mandatory' if is_mandatory else 'advisory'
             logger.warning("Refreshing temporary credentials failed "
@@ -504,7 +482,6 @@ class RefreshableCredentials(Credentials):
             print("Signed request:", request)
 
         """
-        self._refresh()
         return self._frozen_credentials
 
 
@@ -551,10 +528,10 @@ class CachedCredentialFetcher(object):
     async def _get_credentials(self):
         raise NotImplementedError('_get_credentials()')
 
-    def fetch_credentials(self):
-        return self._get_cached_credentials()
+    async def fetch_credentials(self):
+        return await self._get_cached_credentials()
 
-    def _get_cached_credentials(self):
+    async def _get_cached_credentials(self):
         """Get up-to-date credentials.
 
         This will check the cache for up-to-date credentials, calling assume
@@ -562,7 +539,7 @@ class CachedCredentialFetcher(object):
         """
         response = self._load_from_cache()
         if response is None:
-            response = self._get_credentials()
+            response = await self._get_credentials()
             self._write_to_cache(response)
         else:
             logger.debug("Credentials for role retrieved from cache.")
