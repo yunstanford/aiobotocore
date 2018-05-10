@@ -285,14 +285,14 @@ class RefreshableCredentials(Credentials):
 
     def __init__(self, access_key, secret_key, token,
                  expiry_time, refresh_using, method,
-                 time_fetcher=_local_now):
+                 time_fetcher=_local_now, loop=None):
         self._refresh_using = refresh_using
         self._access_key = access_key
         self._secret_key = secret_key
         self._token = token
         self._expiry_time = expiry_time
         self._time_fetcher = time_fetcher
-        self._refresh_lock = threading.Lock()
+        self._loop = loop or asyncio.get_event_loop()
         self.method = method
         self._frozen_credentials = ReadOnlyCredentials(
             access_key, secret_key, token)
@@ -548,7 +548,7 @@ class CachedCredentialFetcher(object):
         filename = filename.replace(':', '_').replace(os.path.sep, '_')
         return filename.replace('/', '_')
 
-    def _get_credentials(self):
+    async def _get_credentials(self):
         raise NotImplementedError('_get_credentials()')
 
     def fetch_credentials(self):
@@ -680,11 +680,11 @@ class AssumeRoleCredentialFetcher(CachedCredentialFetcher):
         argument_hash = sha1(args.encode('utf-8')).hexdigest()
         return self._make_file_safe(argument_hash)
 
-    def _get_credentials(self):
+    async def _get_credentials(self):
         """Get credentials by calling assume role."""
         kwargs = self._assume_role_kwargs()
         client = self._create_client()
-        return client.assume_role(**kwargs)
+        return await client.assume_role(**kwargs)
 
     def _assume_role_kwargs(self):
         """Get the arguments for assume role based on current configuration."""
@@ -726,7 +726,7 @@ class CredentialProvider(object):
     def __init__(self, session=None):
         self.session = session
 
-    def load(self):
+    async def load(self):
         """
         Loads the credentials from their source & sets them on the object.
 
@@ -756,6 +756,9 @@ class CredentialProvider(object):
         return found
 
 
+# 
+# Credential Providers
+# ####################
 class ProcessProvider(CredentialProvider):
 
     METHOD = 'custom-process'
@@ -1651,7 +1654,7 @@ class CredentialResolver(object):
         except ValueError:
             raise UnknownCredentialError(name=name)
 
-    def load_credentials(self):
+    async def load_credentials(self):
         """
         Goes through the credentials chain, returning the first ``Credentials``
         that could be loaded.
@@ -1659,7 +1662,7 @@ class CredentialResolver(object):
         # First provider to return a non-None response wins.
         for provider in self.providers:
             logger.debug("Looking for credentials via: %s", provider.METHOD)
-            creds = provider.load()
+            creds = await provider.load()
             if creds is not None:
                 return creds
 
