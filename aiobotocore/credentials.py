@@ -748,7 +748,7 @@ class ProcessProvider(CredentialProvider):
         self._loaded_config = None
         self._popen = popen
 
-    def load(self):
+    async def load(self):
         credential_process = self._credential_process
         if credential_process is None:
             return
