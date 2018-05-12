@@ -815,12 +815,12 @@ class InstanceMetadataProvider(CredentialProvider):
     def __init__(self, iam_role_fetcher):
         self._role_fetcher = iam_role_fetcher
 
-    def load(self):
+    async def load(self):
         fetcher = self._role_fetcher
         # We do the first request, to see if we get useful data back.
         # If not, we'll pass & move on to whatever's next in the credential
         # chain.
-        metadata = fetcher.retrieve_iam_role_credentials()
+        metadata = await fetcher.retrieve_iam_role_credentials()
         if not metadata:
             return None
         logger.debug('Found credentials from IAM Role: %s',
