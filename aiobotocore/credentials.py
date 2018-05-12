@@ -884,7 +884,7 @@ class EnvProvider(CredentialProvider):
                 'expiry_time', self.EXPIRY_TIME)
         return var_mapping
 
-    def load(self):
+    async def load(self):
         """
         Search for credentials in explicit environment variables.
         """
@@ -914,7 +914,7 @@ class EnvProvider(CredentialProvider):
         method = self.METHOD
         environ = self.environ
 
-        def fetch_credentials(require_expiry=True):
+        async def fetch_credentials(require_expiry=True):
             credentials = {}
 
             access_key = environ.get(mapping['access_key'])
@@ -963,7 +963,7 @@ class OriginalEC2Provider(CredentialProvider):
         self._environ = environ
         self._parser = parser
 
-    def load(self):
+    async def load(self):
         """
         Search for a credential file used by original EC2 CLI tools.
         """
@@ -1001,7 +1001,7 @@ class SharedCredentialProvider(CredentialProvider):
             ini_parser = botocore.configloader.raw_config_parse
         self._ini_parser = ini_parser
 
-    def load(self):
+    async def load(self):
         try:
             available_creds = self._ini_parser(self._creds_filename)
         except ConfigNotFound:
@@ -1050,7 +1050,7 @@ class ConfigProvider(CredentialProvider):
             config_parser = botocore.configloader.load_config
         self._config_parser = config_parser
 
-    def load(self):
+    async def load(self):
         """
         If there is are credentials in the configuration associated with
         the session, use those.
