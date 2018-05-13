@@ -1500,7 +1500,7 @@ class ContainerProvider(CredentialProvider):
         self._environ = environ
         self._fetcher = fetcher
 
-    def load(self):
+    async def load(self):
         # This cred provider is only triggered if the self.ENV_VAR is set,
         # which only happens if you opt into this feature.
         if self.ENV_VAR in self._environ or self.ENV_VAR_FULL in self._environ:
@@ -1532,9 +1532,9 @@ class ContainerProvider(CredentialProvider):
             }
 
     def _create_fetcher(self, full_uri, headers):
-        def fetch_creds():
+        async def fetch_creds():
             try:
-                response = self._fetcher.retrieve_full_uri(
+                response = await self._fetcher.retrieve_full_uri(
                     full_uri, headers=headers)
             except MetadataRetrievalError as e:
                 logger.debug("Error retrieving container metadata: %s", e,
