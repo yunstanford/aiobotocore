@@ -1095,7 +1095,7 @@ class BotoProvider(CredentialProvider):
         self._environ = environ
         self._ini_parser = ini_parser
 
-    def load(self):
+    async def load(self):
         """
         Look for credentials in boto config file.
         """
@@ -1187,7 +1187,7 @@ class AssumeRoleProvider(CredentialProvider):
         self._credential_sourcer = credential_sourcer
         self._visited_profiles = [self._profile_name]
 
-    def load(self):
+    async def load(self):
         self._loaded_config = self._load_config()
         profiles = self._loaded_config.get('profiles', {})
         profile = profiles.get(self._profile_name, {})
@@ -1197,9 +1197,9 @@ class AssumeRoleProvider(CredentialProvider):
     def _has_assume_role_config_vars(self, profile):
         return self.ROLE_CONFIG_VAR in profile
 
-    def _load_creds_via_assume_role(self, profile_name):
+    async def _load_creds_via_assume_role(self, profile_name):
         role_config = self._get_role_config(profile_name)
-        source_credentials = self._resolve_source_credentials(
+        source_credentials = await self._resolve_source_credentials(
             role_config, profile_name
         )
 
@@ -1351,25 +1351,25 @@ class AssumeRoleProvider(CredentialProvider):
         static_keys = ['aws_secret_access_key', 'aws_access_key_id']
         return any(static_key in profile for static_key in static_keys)
 
-    def _resolve_source_credentials(self, role_config, profile_name):
+    async def _resolve_source_credentials(self, role_config, profile_name):
         credential_source = role_config.get('credential_source')
         if credential_source is not None:
-            return self._resolve_credentials_from_source(
+            return await self._resolve_credentials_from_source(
                 credential_source, profile_name
             )
 
         source_profile = role_config['source_profile']
         self._visited_profiles.append(source_profile)
-        return self._resolve_credentials_from_profile(source_profile)
+        return await self._resolve_credentials_from_profile(source_profile)
 
-    def _resolve_credentials_from_profile(self, profile_name):
+    async def _resolve_credentials_from_profile(self, profile_name):
         profiles = self._loaded_config.get('profiles', {})
         profile = profiles[profile_name]
 
         if self._has_static_credentials(profile):
             return self._resolve_static_credentials_from_profile(profile)
 
-        return self._load_creds_via_assume_role(profile_name)
+        return await self._load_creds_via_assume_role(profile_name)
 
     def _resolve_static_credentials_from_profile(self, profile):
         try:
@@ -1382,9 +1382,9 @@ class AssumeRoleProvider(CredentialProvider):
             raise PartialCredentialsError(
                 provider=self.METHOD, cred_var=str(e))
 
-    def _resolve_credentials_from_source(self, credential_source,
+    async def _resolve_credentials_from_source(self, credential_source,
                                          profile_name):
-        credentials = self._credential_sourcer.source_credentials(
+        credentials = await self._credential_sourcer.source_credentials(
             credential_source)
         if credentials is None:
             raise CredentialRetrievalError(
@@ -1414,7 +1414,7 @@ class CanonicalNameCredentialSourcer(object):
         """
         return source_name in [p.CANONICAL_NAME for p in self._providers]
 
-    def source_credentials(self, source_name):
+    async def source_credentials(self, source_name):
         """Loads source credentials based on the provided configuration.
 
         :type source_name: str
@@ -1425,8 +1425,8 @@ class CanonicalNameCredentialSourcer(object):
         """
         source = self._get_provider(source_name)
         if isinstance(source, CredentialResolver):
-            return source.load_credentials()
-        return source.load()
+            return await source.load_credentials()
+        return await source.load()
 
     def _get_provider(self, canonical_name):
         """Return a credential provider by its canonical name.
