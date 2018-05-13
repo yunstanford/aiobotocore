@@ -19,3 +19,4 @@ multidict==4.1.0
 wrapt==1.10.11
 dill==0.2.7.1
 packaging==17.1
+asynctest==0.12.0

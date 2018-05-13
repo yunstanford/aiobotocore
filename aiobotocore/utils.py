@@ -16,10 +16,10 @@ from botocore.utils import (
 )
 
 
-RETRYABLE_HTTP_ERRORS = [
+RETRYABLE_HTTP_ERRORS = (
     aiohttp.ClientConnectionError,
     aiohttp.ServerTimeoutError,
-]
+)
 logger = logging.getLogger(__name__)
 
 
