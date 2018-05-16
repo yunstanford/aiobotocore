@@ -16,7 +16,7 @@ import asyncio
 import json
 import pytest
 
-from aiobotocore.utils import ContainerMetadataFetcher
+from aiobotocore.utils import ContainerMetadataFetcher, InstanceMetadataFetcher
 from botocore.exceptions import MetadataRetrievalError
 
 
@@ -43,6 +43,9 @@ def container_metadata_fetcher(mock_http):
     return ContainerMetadataFetcher(mock_http)
 
 
+############################
+# ContainerMetadataFetcher #
+############################
 @pytest.mark.moto
 @pytest.mark.asyncio
 async def test_can_specify_extra_headers_are_merged(container_metadata_fetcher, mock_http):
@@ -241,3 +244,60 @@ async def test_error_raised_on_nonallowed_url(container_metadata_fetcher, mock_h
 @pytest.mark.asyncio
 async def test_external_host_not_allowed_if_https(container_metadata_fetcher, mock_http):
     await _assert_host_is_not_allowed('https://somewhere.com/foo', container_metadata_fetcher, mock_http)
+
+
+###########################
+# InstanceMetadataFetcher #
+###########################
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_disabled_by_environment(mock_http):
+    env = {'AWS_EC2_METADATA_DISABLED': 'true'}
+    instance_metadata_fetcher = InstanceMetadataFetcher(env=env, session=mock_http)
+    result = await instance_metadata_fetcher.retrieve_iam_role_credentials()
+    assert result == {}
+    assert mock_http.get.called is False
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_disabled_by_environment_mixed_case(mock_http):
+    env = {'AWS_EC2_METADATA_DISABLED': 'tRuE'}
+    instance_metadata_fetcher = InstanceMetadataFetcher(env=env, session=mock_http)
+    result = await instance_metadata_fetcher.retrieve_iam_role_credentials()
+    assert result == {}
+    assert mock_http.get.called is False
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_disabling_env_var_not_true(mock_http):
+    url = 'https://example.com/'
+    env = {'AWS_EC2_METADATA_DISABLED': 'false'}
+    creds = {
+        'AccessKeyId': 'spam',
+        'SecretAccessKey': 'eggs',
+        'Token': 'spam-token',
+        'Expiration': 'something',
+    }
+
+    profiles_response = MockResponse(200, text='role-name')
+
+    creds_response = MockResponse(200, text=json.dumps(creds))
+
+    mock_http.get = asynctest.CoroutineMock(side_effect=[
+        profiles_response,
+        creds_response,
+    ])
+
+    fetcher = InstanceMetadataFetcher(url=url, env=env, session=mock_http)
+    result = await fetcher.retrieve_iam_role_credentials()
+
+    expected_result = {
+        'access_key': 'spam',
+        'secret_key': 'eggs',
+        'token': 'spam-token',
+        'expiry_time': 'something',
+        'role_name': 'role-name',
+    }
+    assert result == expected_result

@@ -139,7 +139,7 @@ class ContainerMetadataFetcher(object):
 class InstanceMetadataFetcher(object):
     def __init__(self, timeout=DEFAULT_METADATA_SERVICE_TIMEOUT,
                  num_attempts=1, url=METADATA_SECURITY_CREDENTIALS_URL,
-                 env=None):
+                 env=None, session=None):
         self._timeout = timeout
         self._num_attempts = num_attempts
         self._url = url
@@ -147,7 +147,7 @@ class InstanceMetadataFetcher(object):
             env = os.environ.copy()
         self._disabled = env.get('AWS_EC2_METADATA_DISABLED', 'false').lower()
         self._disabled = self._disabled == 'true'
-        self._session = aiohttp.ClientSession()
+        self._session = session or aiohttp.ClientSession()
 
     async def _get_request(self, url, timeout, num_attempts=1):
         if self._disabled:
