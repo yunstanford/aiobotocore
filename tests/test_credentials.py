@@ -155,70 +155,36 @@ async def test_refreshable_credentials__refresh(mock_time, refreshable_credentia
     assert refreshable_credentials.token == 'NEW-TOKEN'
 
 
-#     def setUp(self):
-#         super(TestRefreshableCredentials, self).setUp()
-#         self.refresher = mock.Mock()
-#         self.future_time = datetime.now(tzlocal()) + timedelta(hours=24)
-#         self.expiry_time = \
-#             datetime.now(tzlocal()) - timedelta(minutes=30)
-#         self.metadata = {
-#             'access_key': 'NEW-ACCESS',
-#             'secret_key': 'NEW-SECRET',
-#             'token': 'NEW-TOKEN',
-#             'expiry_time': self.future_time.isoformat(),
-#             'role_name': 'rolename',
-#         }
-#         self.refresher.return_value = self.metadata
-#         self.mock_time = mock.Mock()
-#         self.creds = credentials.RefreshableCredentials(
-#             'ORIGINAL-ACCESS', 'ORIGINAL-SECRET', 'ORIGINAL-TOKEN',
-#             self.expiry_time, self.refresher, 'iam-role',
-#             time_fetcher=self.mock_time
-#         )
-
-#     def test_refresh_needed(self):
-#         # The expiry time was set for 30 minutes ago, so if we
-#         # say the current time is utcnow(), then we should need
-#         # a refresh.
-#         self.mock_time.return_value = datetime.now(tzlocal())
-#         self.assertTrue(self.creds.refresh_needed())
-#         # We should refresh creds, if we try to access "access_key"
-#         # or any of the cred vars.
-#         self.assertEqual(self.creds.access_key, 'NEW-ACCESS')
-#         self.assertEqual(self.creds.secret_key, 'NEW-SECRET')
-#         self.assertEqual(self.creds.token, 'NEW-TOKEN')
-
-#     def test_no_expiration(self):
-#         creds = credentials.RefreshableCredentials(
-#             'ORIGINAL-ACCESS', 'ORIGINAL-SECRET', 'ORIGINAL-TOKEN',
-#             None, self.refresher, 'iam-role', time_fetcher=self.mock_time
-#         )
-#         self.assertFalse(creds.refresh_needed())
-
-#     def test_no_refresh_needed(self):
-#         # The expiry time was 30 minutes ago, let's say it's an hour
-#         # ago currently.  That would mean we don't need a refresh.
-#         self.mock_time.return_value = (
-#             datetime.now(tzlocal()) - timedelta(minutes=60))
-#         self.assertTrue(not self.creds.refresh_needed())
-
-#         self.assertEqual(self.creds.access_key, 'ORIGINAL-ACCESS')
-#         self.assertEqual(self.creds.secret_key, 'ORIGINAL-SECRET')
-#         self.assertEqual(self.creds.token, 'ORIGINAL-TOKEN')
-
-#     def test_get_credentials_set(self):
-#         # We need to return a consistent set of credentials to use during the
-#         # signing process.
-#         self.mock_time.return_value = (
-#             datetime.now(tzlocal()) - timedelta(minutes=60))
-#         self.assertTrue(not self.creds.refresh_needed())
-#         credential_set = self.creds.get_frozen_credentials()
-#         self.assertEqual(credential_set.access_key, 'ORIGINAL-ACCESS')
-#         self.assertEqual(credential_set.secret_key, 'ORIGINAL-SECRET')
-#         self.assertEqual(credential_set.token, 'ORIGINAL-TOKEN')
+# class TestDeferredRefreshableCredentials
+@pytest.fixture
+def refresher():
+    future_time = datetime.now(tzlocal()) + timedelta(hours=24)
+    metadata = {
+        'access_key': 'NEW-ACCESS',
+        'secret_key': 'NEW-SECRET',
+        'token': 'NEW-TOKEN',
+        'expiry_time': future_time.isoformat(),
+        'role_name': 'rolename',
+    }
+    return asynctest.CoroutineMock(return_value=metadata)
 
 
-# class TestDeferredRefreshableCredentials(unittest.TestCase):
+@pytest.fixture
+def deferred_refreshable_credentials(refresher, mock_time):
+    mock_time.return_value = datetime.now(tzlocal())
+    return credentials.DeferredRefreshableCredentials(
+            refresher, 'iam-role', mock_time,
+        )
+
+
+# @pytest.mark.moto
+# def test_deferred_refreshable_credentials_refresh_using_called_on_first_access(
+#         deferred_refreshable_credentials, refresher):
+#     assert refresher.called is False
+#     deferred_refreshable_credentials.get_frozen_credentials()
+#     assert refresher.call_count == 1
+
+
 #     def setUp(self):
 #         self.refresher = mock.Mock()
 #         self.future_time = datetime.now(tzlocal()) + timedelta(hours=24)
