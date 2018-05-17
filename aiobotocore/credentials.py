@@ -284,7 +284,7 @@ class RefreshableCredentials(Credentials):
     # The time at which all threads will block waiting for
     # refreshed credentials.
     _mandatory_refresh_timeout = 10 * 60
-    _refresh_task_period = 1 * 60
+    _refresh_task_period = 1 * 30
 
     def __init__(self, access_key, secret_key, token,
                  expiry_time, refresh_using, method,

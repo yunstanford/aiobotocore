@@ -20,7 +20,7 @@ import shutil
 import json
 import copy
 import pytest
-
+import asynctest
 from dateutil.tz import tzlocal, tzutc
 
 import aiobotocore.session
@@ -76,7 +76,85 @@ def test_credentials_unicode_input():
     assert isinstance(c.access_key, type(u'u')) is True
     assert isinstance(c.secret_key, type(u'u')) is True
 
-# class TestRefreshableCredentials(TestCredentials):
+
+# class TestRefreshableCredentials:
+@pytest.fixture
+def mock_time():
+    return mock.Mock()
+
+
+@pytest.fixture
+def refreshable_credentials(mock_time):
+    future_time = datetime.now(tzlocal()) + timedelta(hours=24)
+    expiry_time = datetime.now(tzlocal()) - timedelta(minutes=30)
+    metadata = {
+        'access_key': 'NEW-ACCESS',
+        'secret_key': 'NEW-SECRET',
+        'token': 'NEW-TOKEN',
+        'expiry_time': future_time.isoformat(),
+        'role_name': 'rolename',
+    }
+    refresher = asynctest.CoroutineMock(return_value=metadata)
+    return credentials.RefreshableCredentials(
+        'ORIGINAL-ACCESS', 'ORIGINAL-SECRET', 'ORIGINAL-TOKEN',
+        expiry_time, refresher, 'iam-role',
+        time_fetcher=mock_time,
+    )
+
+
+@pytest.mark.moto
+def test_refreshable_credentials_refresh_needed(mock_time, refreshable_credentials):
+    # The expiry time was set for 30 minutes ago, so if we
+    # say the current time is utcnow(), then we should need
+    # a refresh.
+    mock_time.return_value = datetime.now(tzlocal())
+    assert refreshable_credentials.refresh_needed() is True
+
+
+@pytest.mark.moto
+def test_refreshable_credentials_no_expiration(mock_time):
+    creds = credentials.RefreshableCredentials(
+        'ORIGINAL-ACCESS', 'ORIGINAL-SECRET', 'ORIGINAL-TOKEN',
+        None, mock.Mock(), 'iam-role', time_fetcher=mock_time
+    )
+    assert creds.refresh_needed() is False
+
+
+@pytest.mark.moto
+def test_refreshable_credentials_no_refresh_needed(mock_time, refreshable_credentials):
+    # The expiry time was 30 minutes ago, let's say it's an hour
+    # ago currently.  That would mean we don't need a refresh.
+    mock_time.return_value = (
+        datetime.now(tzlocal()) - timedelta(minutes=60))
+    assert refreshable_credentials.refresh_needed() is False
+
+
+@pytest.mark.moto
+def test_refreshable_credentials_get_credentials_set(mock_time, refreshable_credentials):
+    # We need to return a consistent set of credentials to use during the
+    # signing process.
+    mock_time.return_value = (
+        datetime.now(tzlocal()) - timedelta(minutes=60))
+    assert refreshable_credentials.refresh_needed() is False
+    credential_set = refreshable_credentials.get_frozen_credentials()
+    assert credential_set.access_key == 'ORIGINAL-ACCESS'
+    assert credential_set.secret_key == 'ORIGINAL-SECRET'
+    assert credential_set.token == 'ORIGINAL-TOKEN'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_refreshable_credentials__refresh(mock_time, refreshable_credentials):
+    # The expiry time was set for 30 minutes ago, so if we
+    # say the current time is utcnow(), then we should need
+    # a refresh.
+    mock_time.return_value = datetime.now(tzlocal())
+    await refreshable_credentials._refresh()
+    assert refreshable_credentials.access_key == 'NEW-ACCESS'
+    assert refreshable_credentials.secret_key == 'NEW-SECRET'
+    assert refreshable_credentials.token == 'NEW-TOKEN'
+
+
 #     def setUp(self):
 #         super(TestRefreshableCredentials, self).setUp()
 #         self.refresher = mock.Mock()
