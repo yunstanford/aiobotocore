@@ -261,7 +261,7 @@ class Credentials(object):
         self.access_key = botocore.compat.ensure_unicode(self.access_key)
         self.secret_key = botocore.compat.ensure_unicode(self.secret_key)
 
-    def get_frozen_credentials(self):
+    async def get_frozen_credentials(self):
         return ReadOnlyCredentials(self.access_key,
                                    self.secret_key,
                                    self.token)
@@ -449,7 +449,7 @@ class RefreshableCredentials(Credentials):
                      self._expiry_time)
         self._normalize()
 
-    def get_frozen_credentials(self):
+    async def get_frozen_credentials(self):
         """Return immutable credentials.
 
         The ``access_key``, ``secret_key``, and ``token`` properties
@@ -479,10 +479,11 @@ class RefreshableCredentials(Credentials):
             # duration of generate_presigned_url and will be
             # immediately thrown away.
             request = some_code.sign_some_request(
-                with_credentials=creds.get_frozen_credentials())
+                with_credentials=(await creds.get_frozen_credentials()))
             print("Signed request:", request)
 
         """
+        await self._refresh()
         return self._frozen_credentials
 
 
@@ -662,7 +663,7 @@ class AssumeRoleCredentialFetcher(CachedCredentialFetcher):
     async def _get_credentials(self):
         """Get credentials by calling assume role."""
         kwargs = self._assume_role_kwargs()
-        client = self._create_client()
+        client = await self._create_client()
         return await client.assume_role(**kwargs)
 
     def _assume_role_kwargs(self):
@@ -679,9 +680,9 @@ class AssumeRoleCredentialFetcher(CachedCredentialFetcher):
 
         return assume_role_kwargs
 
-    def _create_client(self):
+    async def _create_client(self):
         """Create an STS client using the source credentials."""
-        frozen_credentials = self._source_credentials.get_frozen_credentials()
+        frozen_credentials = await self._source_credentials.get_frozen_credentials()
         return self._client_creator(
             'sts',
             aws_access_key_id=frozen_credentials.access_key,

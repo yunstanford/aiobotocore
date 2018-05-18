@@ -130,13 +130,14 @@ def test_refreshable_credentials_no_refresh_needed(mock_time, refreshable_creden
 
 
 @pytest.mark.moto
-def test_refreshable_credentials_get_credentials_set(mock_time, refreshable_credentials):
+@pytest.mark.asyncio
+async def test_refreshable_credentials_get_credentials_set(mock_time, refreshable_credentials):
     # We need to return a consistent set of credentials to use during the
     # signing process.
     mock_time.return_value = (
         datetime.now(tzlocal()) - timedelta(minutes=60))
     assert refreshable_credentials.refresh_needed() is False
-    credential_set = refreshable_credentials.get_frozen_credentials()
+    credential_set = await refreshable_credentials.get_frozen_credentials()
     assert credential_set.access_key == 'ORIGINAL-ACCESS'
     assert credential_set.secret_key == 'ORIGINAL-SECRET'
     assert credential_set.token == 'ORIGINAL-TOKEN'
@@ -177,55 +178,92 @@ def deferred_refreshable_credentials(refresher, mock_time):
         )
 
 
-# @pytest.mark.moto
-# def test_deferred_refreshable_credentials_refresh_using_called_on_first_access(
-#         deferred_refreshable_credentials, refresher):
-#     assert refresher.called is False
-#     deferred_refreshable_credentials.get_frozen_credentials()
-#     assert refresher.call_count == 1
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_deferred_refreshable_credentials_refresh_using_called_on_first_access(
+        deferred_refreshable_credentials, refresher):
+    assert refresher.called is False
+    await deferred_refreshable_credentials.get_frozen_credentials()
+    assert refresher.call_count == 1
 
 
-#     def setUp(self):
-#         self.refresher = mock.Mock()
-#         self.future_time = datetime.now(tzlocal()) + timedelta(hours=24)
-#         self.metadata = {
-#             'access_key': 'NEW-ACCESS',
-#             'secret_key': 'NEW-SECRET',
-#             'token': 'NEW-TOKEN',
-#             'expiry_time': self.future_time.isoformat(),
-#             'role_name': 'rolename',
-#         }
-#         self.refresher.return_value = self.metadata
-#         self.mock_time = mock.Mock()
-#         self.mock_time.return_value = datetime.now(tzlocal())
-
-#     def test_refresh_using_called_on_first_access(self):
-#         creds = credentials.DeferredRefreshableCredentials(
-#             self.refresher, 'iam-role', self.mock_time
-#         )
-
-#         # The credentials haven't been accessed, so there should be no calls.
-#         self.refresher.assert_not_called()
-
-#         # Now that the object has been accessed, it should have called the
-#         # refresher
-#         creds.get_frozen_credentials()
-#         self.assertEqual(self.refresher.call_count, 1)
-
-#     def test_refresh_only_called_once(self):
-#         creds = credentials.DeferredRefreshableCredentials(
-#             self.refresher, 'iam-role', self.mock_time
-#         )
-
-#         for _ in range(5):
-#             creds.get_frozen_credentials()
-
-#         # The credentials were accessed several times in a row, but only
-#         # should call refresh once.
-#         self.assertEqual(self.refresher.call_count, 1)
+# class TestAssumeRoleCredentialFetcher
+def get_expected_creds_from_response(response):
+    expiration = response['Credentials']['Expiration']
+    if isinstance(expiration, datetime):
+        expiration = expiration.isoformat()
+    return {
+        'access_key': response['Credentials']['AccessKeyId'],
+        'secret_key': response['Credentials']['SecretAccessKey'],
+        'token': response['Credentials']['SessionToken'],
+        'expiry_time': expiration
+    }
 
 
-# class TestAssumeRoleCredentialFetcher(BaseEnvVar):
+def some_future_time():
+    timeobj = datetime.now(tzlocal())
+    return timeobj + timedelta(hours=24)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_credential_fetcher_no_cache():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn
+    )
+
+    expected_response = get_expected_creds_from_response(response)
+    response = await refresher.fetch_credentials()
+
+    assert response == expected_response
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_credential_fetcher_expiration_in_datetime_format():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            # Note the lack of isoformat(), we're using
+            # a datetime.datetime type.  This will ensure
+            # we test both parsing as well as serializing
+            # from a given datetime because the credentials
+            # are immediately expired.
+            'Expiration': some_future_time(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn
+    )
+
+    expected_response = get_expected_creds_from_response(response)
+    response = await refresher.fetch_credentials()
+
+    assert response == expected_response
+
+
 #     def setUp(self):
 #         super(TestAssumeRoleCredentialFetcher, self).setUp()
 #         self.source_creds = credentials.Credentials('a', 'b', 'c')
@@ -241,63 +279,10 @@ def deferred_refreshable_credentials(refresher, mock_time):
 #             client.assume_role.return_value = with_response
 #         return mock.Mock(return_value=client)
 
-#     def get_expected_creds_from_response(self, response):
-#         expiration = response['Credentials']['Expiration']
-#         if isinstance(expiration, datetime):
-#             expiration = expiration.isoformat()
-#         return {
-#             'access_key': response['Credentials']['AccessKeyId'],
-#             'secret_key': response['Credentials']['SecretAccessKey'],
-#             'token': response['Credentials']['SessionToken'],
-#             'expiry_time': expiration
-#         }
 
 #     def some_future_time(self):
 #         timeobj = datetime.now(tzlocal())
 #         return timeobj + timedelta(hours=24)
-
-#     def test_no_cache(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn
-#         )
-
-#         expected_response = self.get_expected_creds_from_response(response)
-#         response = refresher.fetch_credentials()
-
-#         self.assertEqual(response, expected_response)
-
-#     def test_expiration_in_datetime_format(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 # Note the lack of isoformat(), we're using
-#                 # a datetime.datetime type.  This will ensure
-#                 # we test both parsing as well as serializing
-#                 # from a given datetime because the credentials
-#                 # are immediately expired.
-#                 'Expiration': self.some_future_time()
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn
-#         )
-
-#         expected_response = self.get_expected_creds_from_response(response)
-#         response = refresher.fetch_credentials()
-
-#         self.assertEqual(response, expected_response)
 
 #     def test_retrieves_from_cache(self):
 #         date_in_future = datetime.utcnow() + timedelta(seconds=1000)
