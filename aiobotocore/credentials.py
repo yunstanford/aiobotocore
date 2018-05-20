@@ -892,7 +892,7 @@ class EnvProvider(CredentialProvider):
         if self._mapping['access_key'] in self.environ:
             logger.info('Found credentials in environment variables.')
             fetcher = self._create_credentials_fetcher()
-            credentials = fetcher(require_expiry=False)
+            credentials = await fetcher(require_expiry=False)
 
             expiry_time = credentials['expiry_time']
             if expiry_time is not None:

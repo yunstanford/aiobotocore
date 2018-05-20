@@ -711,19 +711,23 @@ async def test_mfa_refresh_enabled():
     assert calls == expected_calls
 
 
-# class TestEnvVar(BaseEnvVar):
+####################
+# class TestEnvVar #
+####################
 
-#     def test_envvars_are_found_no_token(self):
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.method, 'env')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_envvars_are_found_no_token():
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.method == 'env'
 
 #     def test_envvars_found_with_security_token(self):
 #         environ = {
