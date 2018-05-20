@@ -62,7 +62,9 @@ def path(filename):
     return os.path.join(os.path.dirname(__file__), 'cfg', filename)
 
 
-# class TestCredentials
+#########################
+# class TestCredentials #
+#########################
 @pytest.mark.moto
 def test_credentials_detect_nonascii_character():
     c = credentials.Credentials('foo\xe2\x80\x99', 'bar\xe2\x80\x99')
@@ -77,7 +79,9 @@ def test_credentials_unicode_input():
     assert isinstance(c.secret_key, type(u'u')) is True
 
 
-# class TestRefreshableCredentials:
+####################################
+# class TestRefreshableCredentials #
+####################################
 @pytest.fixture
 def mock_time():
     return mock.Mock()
@@ -156,7 +160,9 @@ async def test_refreshable_credentials__refresh(mock_time, refreshable_credentia
     assert refreshable_credentials.token == 'NEW-TOKEN'
 
 
-# class TestDeferredRefreshableCredentials
+############################################
+# class TestDeferredRefreshableCredentials #
+############################################
 @pytest.fixture
 def refresher():
     future_time = datetime.now(tzlocal()) + timedelta(hours=24)
@@ -187,7 +193,9 @@ async def test_deferred_refreshable_credentials_refresh_using_called_on_first_ac
     assert refresher.call_count == 1
 
 
-# class TestAssumeRoleCredentialFetcher
+#########################################
+# class TestAssumeRoleCredentialFetcher #
+#########################################
 def get_expected_creds_from_response(response):
     expiration = response['Credentials']['Expiration']
     if isinstance(expiration, datetime):
@@ -264,385 +272,443 @@ async def test_assume_role_credential_fetcher_expiration_in_datetime_format():
     assert response == expected_response
 
 
-#     def setUp(self):
-#         super(TestAssumeRoleCredentialFetcher, self).setUp()
-#         self.source_creds = credentials.Credentials('a', 'b', 'c')
-#         self.role_arn = 'myrole'
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_credential_fetcher_retrieves_from_cache():
+    date_in_future = datetime.utcnow() + timedelta(seconds=1000)
+    utc_timestamp = date_in_future.isoformat() + 'Z'
+    cache_key = (
+        '793d6e2f27667ab2da104824407e486bfec24a47'
+    )
+    cache = {
+        cache_key: {
+            'Credentials': {
+                'AccessKeyId': 'foo-cached',
+                'SecretAccessKey': 'bar-cached',
+                'SessionToken': 'baz-cached',
+                'Expiration': utc_timestamp,
+            }
+        }
+    }
 
-#     def create_client_creator(self, with_response):
-#         # Create a mock sts client that returns a specific response
-#         # for assume_role.
-#         client = mock.Mock()
-#         if isinstance(with_response, list):
-#             client.assume_role.side_effect = with_response
-#         else:
-#             client.assume_role.return_value = with_response
-#         return mock.Mock(return_value=client)
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn, cache=cache,
+    )
+
+    expected_response = get_expected_creds_from_response(
+        cache[cache_key]
+    )
+    response = await refresher.fetch_credentials()
+
+    assert response == expected_response
+    client_creator.assert_not_called()
 
 
-#     def some_future_time(self):
-#         timeobj = datetime.now(tzlocal())
-#         return timeobj + timedelta(hours=24)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_credential_fetcher_cache_key_is_windows_safe():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    cache = {}
 
-#     def test_retrieves_from_cache(self):
-#         date_in_future = datetime.utcnow() + timedelta(seconds=1000)
-#         utc_timestamp = date_in_future.isoformat() + 'Z'
-#         cache_key = (
-#             '793d6e2f27667ab2da104824407e486bfec24a47'
-#         )
-#         cache = {
-#             cache_key: {
-#                 'Credentials': {
-#                     'AccessKeyId': 'foo-cached',
-#                     'SecretAccessKey': 'bar-cached',
-#                     'SessionToken': 'baz-cached',
-#                     'Expiration': utc_timestamp,
-#                 }
-#             }
-#         }
-#         client_creator = mock.Mock()
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn, cache=cache
-#         )
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'arn:aws:iam::role/foo-role'
 
-#         expected_response = self.get_expected_creds_from_response(
-#             cache[cache_key]
-#         )
-#         response = refresher.fetch_credentials()
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn, cache=cache,
+    )
 
-#         self.assertEqual(response, expected_response)
-#         client_creator.assert_not_called()
+    await refresher.fetch_credentials()
 
-#     def test_cache_key_is_windows_safe(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         cache = {}
-#         client_creator = self.create_client_creator(with_response=response)
+    # On windows, you cannot use a a ':' in the filename, so
+    # we need to make sure that it doesn't make it into the cache key.
+    cache_key = (
+        '75c539f0711ba78c5b9e488d0add95f178a54d74'
+    )
+    assert cache_key in cache
+    assert cache[cache_key] == response
 
-#         role_arn = 'arn:aws:iam::role/foo-role'
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, role_arn, cache=cache
-#         )
 
-#         refresher.fetch_credentials()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_cache_key_with_role_session_name():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    cache = {}
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+    role_session_name = 'my_session_name'
 
-#         # On windows, you cannot use a a ':' in the filename, so
-#         # we need to make sure that it doesn't make it into the cache key.
-#         cache_key = (
-#             '75c539f0711ba78c5b9e488d0add95f178a54d74'
-#         )
-#         self.assertIn(cache_key, cache)
-#         self.assertEqual(cache[cache_key], response)
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn, cache=cache,
+        extra_args={'RoleSessionName': role_session_name}
+    )
+    await refresher.fetch_credentials()
 
-#     def test_cache_key_with_role_session_name(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         cache = {}
-#         client_creator = self.create_client_creator(with_response=response)
-#         role_session_name = 'my_session_name'
+    # This is the sha256 hex digest of the expected assume role args.
+    cache_key = (
+        '2964201f5648c8be5b9460a9cf842d73a266daf2'
+    )
+    assert cache_key in cache
+    assert cache[cache_key] == response
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn, cache=cache,
-#             extra_args={'RoleSessionName': role_session_name}
-#         )
-#         refresher.fetch_credentials()
 
-#         # This is the sha256 hex digest of the expected assume role args.
-#         cache_key = (
-#             '2964201f5648c8be5b9460a9cf842d73a266daf2'
-#         )
-#         self.assertIn(cache_key, cache)
-#         self.assertEqual(cache[cache_key], response)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_cache_key_with_policy():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    cache = {}
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
 
-#     def test_cache_key_with_policy(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         cache = {}
-#         client_creator = self.create_client_creator(with_response=response)
-#         policy = json.dumps({
-#             "Version": "2012-10-17",
-#             "Statement": [
-#                 {
-#                     "Effect": "Allow",
-#                     "Action": "*",
-#                     "Resource": "*"
-#                 }
-#             ]
-#         })
+    policy = json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": "*",
+                "Resource": "*"
+            }
+        ]
+    })
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn, cache=cache,
-#             extra_args={'Policy': policy}
-#         )
-#         refresher.fetch_credentials()
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn, cache=cache,
+        extra_args={'Policy': policy}
+    )
+    await refresher.fetch_credentials()
 
-#         # This is the sha256 hex digest of the expected assume role args.
-#         cache_key = (
-#             '176f223d915e82456c253545e192aa21d68f5ab8'
-#         )
-#         self.assertIn(cache_key, cache)
-#         self.assertEqual(cache[cache_key], response)
+    # This is the sha256 hex digest of the expected assume role args.
+    cache_key = (
+        '176f223d915e82456c253545e192aa21d68f5ab8'
+    )
+    assert cache_key in cache
+    assert cache[cache_key] == response
 
-#     def test_assume_role_in_cache_but_expired(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         cache = {
-#             'development--myrole': {
-#                 'Credentials': {
-#                     'AccessKeyId': 'foo-cached',
-#                     'SecretAccessKey': 'bar-cached',
-#                     'SessionToken': 'baz-cached',
-#                     'Expiration': datetime.now(tzlocal()),
-#                 }
-#             }
-#         }
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn, cache=cache
-#         )
-#         expected = self.get_expected_creds_from_response(response)
-#         response = refresher.fetch_credentials()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_in_cache_but_expired():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+    cache = {
+        'development--myrole': {
+            'Credentials': {
+                'AccessKeyId': 'foo-cached',
+                'SecretAccessKey': 'bar-cached',
+                'SessionToken': 'baz-cached',
+                'Expiration': datetime.now(tzlocal()),
+            }
+        }
+    }
 
-#         self.assertEqual(response, expected)
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn, cache=cache
+    )
+    expected = get_expected_creds_from_response(response)
+    response = await refresher.fetch_credentials()
 
-#     def test_role_session_name_can_be_provided(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         role_session_name = 'myname'
+    assert response == expected
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn,
-#             extra_args={'RoleSessionName': role_session_name}
-#         )
-#         refresher.fetch_credentials()
 
-#         client = client_creator.return_value
-#         client.assume_role.assert_called_with(
-#             RoleArn=self.role_arn, RoleSessionName=role_session_name)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_role_session_name_can_be_provided():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+    role_session_name = 'myname'
 
-#     def test_external_id_can_be_provided(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         external_id = 'my_external_id'
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn,
+        extra_args={'RoleSessionName': role_session_name}
+    )
+    await refresher.fetch_credentials()
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn,
-#             extra_args={'ExternalId': external_id}
-#         )
-#         refresher.fetch_credentials()
+    client.assume_role.assert_called_with(
+        RoleArn=role_arn, RoleSessionName=role_session_name)
 
-#         client = client_creator.return_value
-#         client.assume_role.assert_called_with(
-#             RoleArn=self.role_arn, ExternalId=external_id,
-#             RoleSessionName=mock.ANY)
 
-#     def test_policy_can_be_provided(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         policy = json.dumps({
-#             "Version": "2012-10-17",
-#             "Statement": [
-#                 {
-#                     "Effect": "Allow",
-#                     "Action": "*",
-#                     "Resource": "*"
-#                 }
-#             ]
-#         })
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_external_id_can_be_provided():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+    external_id = 'my_external_id'
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn,
-#             extra_args={'Policy': policy}
-#         )
-#         refresher.fetch_credentials()
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn,
+        extra_args={'ExternalId': external_id}
+    )
+    await refresher.fetch_credentials()
 
-#         client = client_creator.return_value
-#         client.assume_role.assert_called_with(
-#             RoleArn=self.role_arn, Policy=policy,
-#             RoleSessionName=mock.ANY)
+    client.assume_role.assert_called_with(
+        RoleArn=role_arn, ExternalId=external_id,
+        RoleSessionName=mock.ANY)
 
-#     def test_duration_seconds_can_be_provided(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         duration = 1234
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn,
-#             extra_args={'DurationSeconds': duration}
-#         )
-#         refresher.fetch_credentials()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_policy_can_be_provided():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+    policy = json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": "*",
+                "Resource": "*"
+            }
+        ]
+    })
 
-#         client = client_creator.return_value
-#         client.assume_role.assert_called_with(
-#             RoleArn=self.role_arn, DurationSeconds=duration,
-#             RoleSessionName=mock.ANY)
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn,
+        extra_args={'Policy': policy}
+    )
+    await refresher.fetch_credentials()
 
-#     def test_mfa(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         prompter = mock.Mock(return_value='token-code')
-#         mfa_serial = 'mfa'
+    client.assume_role.assert_called_with(
+        RoleArn=role_arn, Policy=policy,
+        RoleSessionName=mock.ANY)
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn,
-#             extra_args={'SerialNumber': mfa_serial}, mfa_prompter=prompter
-#         )
-#         refresher.fetch_credentials()
 
-#         client = client_creator.return_value
-#         # In addition to the normal assume role args, we should also
-#         # inject the serial number from the config as well as the
-#         # token code that comes from prompting the user (the prompter
-#         # object).
-#         client.assume_role.assert_called_with(
-#             RoleArn='myrole', RoleSessionName=mock.ANY, SerialNumber='mfa',
-#             TokenCode='token-code')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_duration_seconds_can_be_provided():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+    duration = 1234
 
-#     def test_refreshes(self):
-#         responses = [{
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 # We're creating an expiry time in the past so as
-#                 # soon as we try to access the credentials, the
-#                 # refresh behavior will be triggered.
-#                 'Expiration': (
-#                     datetime.now(tzlocal()) -
-#                     timedelta(seconds=100)).isoformat(),
-#             },
-#         }, {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             }
-#         }]
-#         client_creator = self.create_client_creator(with_response=responses)
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn,
+        extra_args={'DurationSeconds': duration}
+    )
+    await refresher.fetch_credentials()
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn
-#         )
+    client.assume_role.assert_called_with(
+        RoleArn=role_arn, DurationSeconds=duration,
+        RoleSessionName=mock.ANY)
 
-#         # The first call will simply use whatever credentials it is given.
-#         # The second will check the cache, and only make a call if the
-#         # cached credentials are expired.
-#         refresher.fetch_credentials()
-#         refresher.fetch_credentials()
 
-#         client = client_creator.return_value
-#         assume_role_calls = client.assume_role.call_args_list
-#         self.assertEqual(len(assume_role_calls), 2, assume_role_calls)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_mfa():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(return_value=response)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+    prompter = mock.Mock(return_value='token-code')
+    mfa_serial = 'mfa'
 
-#     def test_mfa_refresh_enabled(self):
-#         responses = [{
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 # We're creating an expiry time in the past so as
-#                 # soon as we try to access the credentials, the
-#                 # refresh behavior will be triggered.
-#                 'Expiration': (
-#                     datetime.now(tzlocal()) -
-#                     timedelta(seconds=100)).isoformat(),
-#             },
-#         }, {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             }
-#         }]
-#         client_creator = self.create_client_creator(with_response=responses)
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn,
+        extra_args={'SerialNumber': mfa_serial}, mfa_prompter=prompter
+    )
+    await refresher.fetch_credentials()
 
-#         token_code = 'token-code-1'
-#         prompter = mock.Mock(side_effect=[token_code])
-#         mfa_serial = 'mfa'
+    # In addition to the normal assume role args, we should also
+    # inject the serial number from the config as well as the
+    # token code that comes from prompting the user (the prompter
+    # object).
+    client.assume_role.assert_called_with(
+        RoleArn='myrole', RoleSessionName=mock.ANY, SerialNumber='mfa',
+        TokenCode='token-code')
 
-#         refresher = credentials.AssumeRoleCredentialFetcher(
-#             client_creator, self.source_creds, self.role_arn,
-#             extra_args={'SerialNumber': mfa_serial}, mfa_prompter=prompter
-#         )
 
-#         # This is will refresh credentials if they're expired. Because
-#         # we set the expiry time to something in the past, this will
-#         # trigger the refresh behavior.
-#         refresher.fetch_credentials()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_refreshes():
+    responses = [{
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            # We're creating an expiry time in the past so as
+            # soon as we try to access the credentials, the
+            # refresh behavior will be triggered.
+            'Expiration': (
+                datetime.now(tzlocal()) -
+                timedelta(seconds=100)).isoformat(),
+        },
+    }, {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        }
+    }]
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(side_effect=responses)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
 
-#         assume_role = client_creator.return_value.assume_role
-#         calls = [c[1] for c in assume_role.call_args_list]
-#         expected_calls = [
-#             {
-#                 'RoleArn': self.role_arn,
-#                 'RoleSessionName': mock.ANY,
-#                 'SerialNumber': mfa_serial,
-#                 'TokenCode': token_code
-#             }
-#         ]
-#         self.assertEqual(calls, expected_calls)
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn
+    )
+
+    # The first call will simply use whatever credentials it is given.
+    # The second will check the cache, and only make a call if the
+    # cached credentials are expired.
+    await refresher.fetch_credentials()
+    await refresher.fetch_credentials()
+
+    assume_role_calls = client.assume_role.call_args_list
+    assert len(assume_role_calls) == 2
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_mfa_refresh_enabled():
+    responses = [{
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            # We're creating an expiry time in the past so as
+            # soon as we try to access the credentials, the
+            # refresh behavior will be triggered.
+            'Expiration': (
+                datetime.now(tzlocal()) -
+                timedelta(seconds=100)).isoformat(),
+        },
+    }, {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        }
+    }]
+    client = mock.Mock()
+    client_creator = mock.Mock(return_value=client)
+    client.assume_role = asynctest.CoroutineMock(side_effect=responses)
+    source_creds = credentials.Credentials('a', 'b', 'c')
+    role_arn = 'myrole'
+
+    token_code = 'token-code-1'
+    prompter = mock.Mock(side_effect=[token_code])
+    mfa_serial = 'mfa'
+
+    refresher = credentials.AssumeRoleCredentialFetcher(
+        client_creator, source_creds, role_arn,
+        extra_args={'SerialNumber': mfa_serial}, mfa_prompter=prompter
+    )
+
+    # This is will refresh credentials if they're expired. Because
+    # we set the expiry time to something in the past, this will
+    # trigger the refresh behavior.
+    await refresher.fetch_credentials()
+
+    calls = [c[1] for c in client.assume_role.call_args_list]
+    expected_calls = [
+        {
+            'RoleArn': role_arn,
+            'RoleSessionName': mock.ANY,
+            'SerialNumber': mfa_serial,
+            'TokenCode': token_code
+        }
+    ]
+    assert calls == expected_calls
 
 
 # class TestEnvVar(BaseEnvVar):
