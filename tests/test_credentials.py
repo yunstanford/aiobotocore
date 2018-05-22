@@ -30,6 +30,7 @@ from aiobotocore.credentials import EnvProvider, create_assume_role_refresher
 from aiobotocore.credentials import CredentialProvider, AssumeRoleProvider
 from aiobotocore.credentials import ConfigProvider, SharedCredentialProvider
 from aiobotocore.credentials import Credentials
+import botocore
 import botocore.exceptions
 from botocore.compat import json
 
@@ -714,7 +715,6 @@ async def test_mfa_refresh_enabled():
 ####################
 # class TestEnvVar #
 ####################
-
 @pytest.mark.moto
 @pytest.mark.asyncio
 async def test_envvars_are_found_no_token():
@@ -729,252 +729,301 @@ async def test_envvars_are_found_no_token():
     assert creds.secret_key == 'bar'
     assert creds.method == 'env'
 
-#     def test_envvars_found_with_security_token(self):
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SECURITY_TOKEN': 'baz',
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-#         self.assertEqual(creds.method, 'env')
 
-#     def test_envvars_found_with_session_token(self):
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SESSION_TOKEN': 'baz',
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-#         self.assertEqual(creds.method, 'env')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_envvars_found_with_security_token():
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SECURITY_TOKEN': 'baz',
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
 
-#     def test_envvars_not_found(self):
-#         provider = credentials.EnvProvider(environ={})
-#         creds = provider.load()
-#         self.assertIsNone(creds)
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.method == 'env'
+    assert creds.token == 'baz'
 
-#     def test_can_override_env_var_mapping(self):
-#         # We can change the env var provider to
-#         # use our specified env var names.
-#         environ = {
-#             'FOO_ACCESS_KEY': 'foo',
-#             'FOO_SECRET_KEY': 'bar',
-#             'FOO_SESSION_TOKEN': 'baz',
-#         }
-#         mapping = {
-#             'access_key': 'FOO_ACCESS_KEY',
-#             'secret_key': 'FOO_SECRET_KEY',
-#             'token': 'FOO_SESSION_TOKEN',
-#         }
-#         provider = credentials.EnvProvider(
-#             environ, mapping
-#         )
-#         creds = provider.load()
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
 
-#     def test_can_override_partial_env_var_mapping(self):
-#         # Only changing the access key mapping.
-#         # The other 2 use the default values of
-#         # AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN
-#         # use our specified env var names.
-#         environ = {
-#             'FOO_ACCESS_KEY': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SESSION_TOKEN': 'baz',
-#         }
-#         provider = credentials.EnvProvider(
-#             environ, {'access_key': 'FOO_ACCESS_KEY'}
-#         )
-#         creds = provider.load()
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_envvars_found_with_session_token():
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SESSION_TOKEN': 'baz',
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
+    
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.method == 'env'
+    assert creds.token == 'baz'
 
-#     def test_can_override_expiry_env_var_mapping(self):
-#         expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SESSION_TOKEN': 'baz',
-#             'FOO_EXPIRY': expiry_time.isoformat(),
-#         }
-#         provider = credentials.EnvProvider(
-#             environ, {'expiry_time': 'FOO_EXPIRY'}
-#         )
-#         creds = provider.load()
 
-#         # Since the credentials are expired, we'll trigger a refresh whenever
-#         # we try to access them. Since the environment credentials are still
-#         # expired, this will raise an error.
-#         error_message = (
-#             "Credentials were refreshed, but the refreshed credentials are "
-#             "still expired."
-#         )
-#         with self.assertRaisesRegexp(RuntimeError, error_message):
-#             creds.get_frozen_credentials()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_envvars_not_found():
+    provider = credentials.EnvProvider(environ={})
+    creds = await provider.load()
+    assert creds is None
 
-#     def test_partial_creds_is_an_error(self):
-#         # If the user provides an access key, they must also
-#         # provide a secret key.  Not doing so will generate an
-#         # error.
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             # Missing the AWS_SECRET_ACCESS_KEY
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         with self.assertRaises(botocore.exceptions.PartialCredentialsError):
-#             provider.load()
 
-#     def test_missing_access_key_id_raises_error(self):
-#         expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_override_env_var_mapping():
+    # We can change the env var provider to
+    # use our specified env var names.
+    environ = {
+        'FOO_ACCESS_KEY': 'foo',
+        'FOO_SECRET_KEY': 'bar',
+        'FOO_SESSION_TOKEN': 'baz',
+    }
+    mapping = {
+        'access_key': 'FOO_ACCESS_KEY',
+        'secret_key': 'FOO_SECRET_KEY',
+        'token': 'FOO_SESSION_TOKEN',
+    }
+    provider = credentials.EnvProvider(
+        environ, mapping
+    )
+    creds = await provider.load()
 
-#         del environ['AWS_ACCESS_KEY_ID']
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
 
-#         # Since the credentials are expired, we'll trigger a refresh
-#         # whenever we try to access them. At that refresh time, the relevant
-#         # environment variables are incomplete, so an error will be raised.
-#         with self.assertRaises(botocore.exceptions.PartialCredentialsError):
-#             creds.get_frozen_credentials()
 
-#     def test_credentials_refresh(self):
-#         # First initialize the credentials with an expired credential set.
-#         expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SESSION_TOKEN': 'baz',
-#             'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
-#         self.assertIsInstance(creds, credentials.RefreshableCredentials)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_override_partial_env_var_mapping():
+    # Only changing the access key mapping.
+    # The other 2 use the default values of
+    # AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN
+    # use our specified env var names.
+    environ = {
+        'FOO_ACCESS_KEY': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SESSION_TOKEN': 'baz',
+    }
+    provider = credentials.EnvProvider(
+        environ, {'access_key': 'FOO_ACCESS_KEY'}
+    )
+    creds = await provider.load()
 
-#         # Since the credentials are expired, we'll trigger a refresh whenever
-#         # we try to access them. But at this point the environment hasn't been
-#         # updated, so when it refreshes it will trigger an exception because
-#         # the new creds are still expired.
-#         error_message = (
-#             "Credentials were refreshed, but the refreshed credentials are "
-#             "still expired."
-#         )
-#         with self.assertRaisesRegexp(RuntimeError, error_message):
-#             creds.get_frozen_credentials()
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
 
-#         # Now we update the environment with non-expired credentials,
-#         # so when we access the creds it will refresh and grab the new ones.
-#         expiry_time = datetime.now(tzlocal()) + timedelta(hours=1)
-#         environ.update({
-#             'AWS_ACCESS_KEY_ID': 'bin',
-#             'AWS_SECRET_ACCESS_KEY': 'bam',
-#             'AWS_SESSION_TOKEN': 'biz',
-#             'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
-#         })
 
-#         frozen = creds.get_frozen_credentials()
-#         self.assertEqual(frozen.access_key, 'bin')
-#         self.assertEqual(frozen.secret_key, 'bam')
-#         self.assertEqual(frozen.token, 'biz')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_override_expiry_env_var_mapping():
+    expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SESSION_TOKEN': 'baz',
+        'FOO_EXPIRY': expiry_time.isoformat(),
+    }
+    provider = credentials.EnvProvider(
+        environ, {'expiry_time': 'FOO_EXPIRY'}
+    )
+    creds = await provider.load()
 
-#     def test_credentials_only_refresh_when_needed(self):
-#         expiry_time = datetime.now(tzlocal()) + timedelta(hours=2)
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SESSION_TOKEN': 'baz',
-#             'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
-#         }
-#         provider = credentials.EnvProvider(environ)
+    # Since the credentials are expired, we'll trigger a refresh whenever
+    # we try to access them. Since the environment credentials are still
+    # expired, this will raise an error.
+    error_message = (
+        "Credentials were refreshed, but the refreshed credentials are "
+        "still expired."
+    )
+    with pytest.raises(RuntimeError) as e:
+        await creds.get_frozen_credentials()
+    assert error_message in str(e) 
 
-#         # Perform the initial credential load
-#         creds = provider.load()
 
-#         # Now that the initial load has been performed, we go ahead and
-#         # change the environment. If the credentials were expired,
-#         # they would immediately refresh upon access and we'd get the new
-#         # ones. Since they've got plenty of time, they shouldn't refresh.
-#         expiry_time = datetime.now(tzlocal()) + timedelta(hours=3)
-#         environ.update({
-#             'AWS_ACCESS_KEY_ID': 'bin',
-#             'AWS_SECRET_ACCESS_KEY': 'bam',
-#             'AWS_SESSION_TOKEN': 'biz',
-#             'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
-#         })
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_partial_creds_is_an_error():
+    # If the user provides an access key, they must also
+    # provide a secret key.  Not doing so will generate an
+    # error.
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        # Missing the AWS_SECRET_ACCESS_KEY
+    }
+    provider = credentials.EnvProvider(environ)
+    with pytest.raises(botocore.exceptions.PartialCredentialsError):
+        await provider.load()
 
-#         frozen = creds.get_frozen_credentials()
-#         self.assertEqual(frozen.access_key, 'foo')
-#         self.assertEqual(frozen.secret_key, 'bar')
-#         self.assertEqual(frozen.token, 'baz')
 
-#     def test_credentials_not_refreshable_if_no_expiry_present(self):
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SESSION_TOKEN': 'baz',
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
-#         self.assertNotIsInstance(creds, credentials.RefreshableCredentials)
-#         self.assertIsInstance(creds, credentials.Credentials)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_missing_access_key_id_raises_error():
+    expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
 
-#     def test_credentials_do_not_become_refreshable(self):
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_SESSION_TOKEN': 'baz',
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
-#         frozen = creds.get_frozen_credentials()
-#         self.assertEqual(frozen.access_key, 'foo')
-#         self.assertEqual(frozen.secret_key, 'bar')
-#         self.assertEqual(frozen.token, 'baz')
+    del environ['AWS_ACCESS_KEY_ID']
 
-#         expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
-#         environ.update({
-#             'AWS_ACCESS_KEY_ID': 'bin',
-#             'AWS_SECRET_ACCESS_KEY': 'bam',
-#             'AWS_SESSION_TOKEN': 'biz',
-#             'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
-#         })
+    # Since the credentials are expired, we'll trigger a refresh
+    # whenever we try to access them. At that refresh time, the relevant
+    # environment variables are incomplete, so an error will be raised.
+    with pytest.raises(botocore.exceptions.PartialCredentialsError):
+        await creds.get_frozen_credentials()
 
-#         frozen = creds.get_frozen_credentials()
-#         self.assertEqual(frozen.access_key, 'foo')
-#         self.assertEqual(frozen.secret_key, 'bar')
-#         self.assertEqual(frozen.token, 'baz')
-#         self.assertNotIsInstance(creds, credentials.RefreshableCredentials)
 
-#     def test_credentials_throw_error_if_expiry_goes_away(self):
-#         expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
-#         environ = {
-#             'AWS_ACCESS_KEY_ID': 'foo',
-#             'AWS_SECRET_ACCESS_KEY': 'bar',
-#             'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
-#         }
-#         provider = credentials.EnvProvider(environ)
-#         creds = provider.load()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_refresh():
+    # First initialize the credentials with an expired credential set.
+    expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SESSION_TOKEN': 'baz',
+        'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
+    assert isinstance(creds, credentials.RefreshableCredentials) is True
 
-#         del environ['AWS_CREDENTIAL_EXPIRATION']
+    # Since the credentials are expired, we'll trigger a refresh whenever
+    # we try to access them. But at this point the environment hasn't been
+    # updated, so when it refreshes it will trigger an exception because
+    # the new creds are still expired.
+    error_message = (
+        "Credentials were refreshed, but the refreshed credentials are "
+        "still expired."
+    )
+    with pytest.raises(RuntimeError) as e:
+        await creds.get_frozen_credentials()
 
-#         with self.assertRaises(credentials.PartialCredentialsError):
-#             creds.get_frozen_credentials()
+    assert error_message in str(e)
+
+    # Now we update the environment with non-expired credentials,
+    # so when we access the creds it will refresh and grab the new ones.
+    expiry_time = datetime.now(tzlocal()) + timedelta(hours=1)
+    environ.update({
+        'AWS_ACCESS_KEY_ID': 'bin',
+        'AWS_SECRET_ACCESS_KEY': 'bam',
+        'AWS_SESSION_TOKEN': 'biz',
+        'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
+    })
+
+    frozen = await creds.get_frozen_credentials()
+    assert frozen.access_key == 'bin'
+    assert frozen.secret_key == 'bam'
+    assert frozen.token == 'biz'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_only_refresh_when_needed():
+    expiry_time = datetime.now(tzlocal()) + timedelta(hours=2)
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SESSION_TOKEN': 'baz',
+        'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
+    }
+    provider = credentials.EnvProvider(environ)
+
+    # Perform the initial credential load
+    creds = await provider.load()
+
+    # Now that the initial load has been performed, we go ahead and
+    # change the environment. If the credentials were expired,
+    # they would immediately refresh upon access and we'd get the new
+    # ones. Since they've got plenty of time, they shouldn't refresh.
+    expiry_time = datetime.now(tzlocal()) + timedelta(hours=3)
+    environ.update({
+        'AWS_ACCESS_KEY_ID': 'bin',
+        'AWS_SECRET_ACCESS_KEY': 'bam',
+        'AWS_SESSION_TOKEN': 'biz',
+        'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
+    })
+
+    frozen = await creds.get_frozen_credentials()
+    assert frozen.access_key == 'foo'
+    assert frozen.secret_key == 'bar'
+    assert frozen.token == 'baz'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_not_refreshable_if_no_expiry_present():
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SESSION_TOKEN': 'baz',
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
+    assert isinstance(creds, credentials.RefreshableCredentials) is False
+    assert isinstance(creds, credentials.Credentials) is True
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_do_not_become_refreshable():
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_SESSION_TOKEN': 'baz',
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
+    frozen = await creds.get_frozen_credentials()
+    assert frozen.access_key == 'foo'
+    assert frozen.secret_key == 'bar'
+    assert frozen.token == 'baz'
+
+    expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
+    environ.update({
+        'AWS_ACCESS_KEY_ID': 'bin',
+        'AWS_SECRET_ACCESS_KEY': 'bam',
+        'AWS_SESSION_TOKEN': 'biz',
+        'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
+    })
+
+    frozen = await creds.get_frozen_credentials()
+    assert frozen.access_key == 'foo'
+    assert frozen.secret_key == 'bar'
+    assert frozen.token == 'baz'
+    assert isinstance(creds, credentials.RefreshableCredentials) is False
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_throw_error_if_expiry_goes_away():
+    expiry_time = datetime.now(tzlocal()) - timedelta(hours=1)
+    environ = {
+        'AWS_ACCESS_KEY_ID': 'foo',
+        'AWS_SECRET_ACCESS_KEY': 'bar',
+        'AWS_CREDENTIAL_EXPIRATION': expiry_time.isoformat(),
+    }
+    provider = credentials.EnvProvider(environ)
+    creds = await provider.load()
+
+    del environ['AWS_CREDENTIAL_EXPIRATION']
+
+    with pytest.raises(credentials.PartialCredentialsError):
+        await creds.get_frozen_credentials()
+
+
+
 
 
 # class TestSharedCredentialsProvider(BaseEnvVar):
@@ -1065,6 +1114,8 @@ async def test_envvars_are_found_no_token():
 #             ini_parser=self.ini_parser)
 #         creds = provider.load()
 #         self.assertIsNone(creds)
+
+
 
 
 # class TestConfigFileProvider(BaseEnvVar):
