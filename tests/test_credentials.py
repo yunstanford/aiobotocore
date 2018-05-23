@@ -1582,139 +1582,174 @@ async def test_custom_cache(session):
 
 
 
+#########################################
+# class TestCanonicalNameSourceProvider #
+#########################################
+@pytest.fixture
+def custom_provider1():
+    provider1 = mock.Mock(spec=CredentialProvider)
+    provider1.METHOD = 'provider1'
+    provider1.CANONICAL_NAME = 'CustomProvider1'
+    return provider1
 
-# class TestCanonicalNameSourceProvider(BaseEnvVar):
-#     def setUp(self):
-#         super(TestCanonicalNameSourceProvider, self).setUp()
-#         self.custom_provider1 = mock.Mock(spec=CredentialProvider)
-#         self.custom_provider1.METHOD = 'provider1'
-#         self.custom_provider1.CANONICAL_NAME = 'CustomProvider1'
-#         self.custom_provider2 = mock.Mock(spec=CredentialProvider)
-#         self.custom_provider2.METHOD = 'provider2'
-#         self.custom_provider2.CANONICAL_NAME = 'CustomProvider2'
-#         self.fake_creds = credentials.Credentials('a', 'b', 'c')
 
-#     def test_load_source_credentials(self):
-#         provider = credentials.CanonicalNameCredentialSourcer(providers=[
-#             self.custom_provider1, self.custom_provider2
-#         ])
-#         self.custom_provider1.load.return_value = self.fake_creds
-#         result = provider.source_credentials('CustomProvider1')
-#         self.assertIs(result, self.fake_creds)
+@pytest.fixture
+def custom_provider2():
+    provider2 = mock.Mock(spec=CredentialProvider)
+    provider2.METHOD = 'provider2'
+    provider2.CANONICAL_NAME = 'CustomProvider2'
+    return provider2
 
-#     def test_load_source_credentials_case_insensitive(self):
-#         provider = credentials.CanonicalNameCredentialSourcer(providers=[
-#             self.custom_provider1, self.custom_provider2
-#         ])
-#         self.custom_provider1.load.return_value = self.fake_creds
-#         result = provider.source_credentials('cUsToMpRoViDeR1')
-#         self.assertIs(result, self.fake_creds)
 
-#     def test_load_unknown_canonical_name_raises_error(self):
-#         provider = credentials.CanonicalNameCredentialSourcer(providers=[
-#             self.custom_provider1])
-#         with self.assertRaises(botocore.exceptions.UnknownCredentialError):
-#             provider.source_credentials('CustomUnknown')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_load_source_credentials(custom_provider1, custom_provider2, fake_creds):
+    provider = credentials.CanonicalNameCredentialSourcer(providers=[
+        custom_provider1, custom_provider2
+    ])
+    custom_provider1.load = asynctest.CoroutineMock(return_value=fake_creds)
+    result = await provider.source_credentials('CustomProvider1')
+    assert result is fake_creds
 
-#     def _assert_assume_role_creds_returned_with_shared_file(self, provider):
-#         assume_role_provider = mock.Mock(spec=AssumeRoleProvider)
-#         assume_role_provider.METHOD = 'assume-role'
-#         assume_role_provider.CANONICAL_NAME = None
 
-#         source = credentials.CanonicalNameCredentialSourcer(providers=[
-#             assume_role_provider, provider
-#         ])
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_load_source_credentials_case_insensitive(custom_provider1, custom_provider2, fake_creds):
+    provider = credentials.CanonicalNameCredentialSourcer(providers=[
+        custom_provider1, custom_provider2
+    ])
+    custom_provider1.load = asynctest.CoroutineMock(return_value=fake_creds)
+    result = provider.source_credentials('cUsToMpRoViDeR1')
+    assert result is fake_creds
 
-#         # If the assume role provider returns credentials, those should be
-#         # what is returned.
-#         assume_role_provider.load.return_value = self.fake_creds
-#         provider.load.return_value = credentials.Credentials(
-#             'd', 'e', 'f'
-#         )
 
-#         creds = source.source_credentials(provider.CANONICAL_NAME)
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertEqual(creds.token, 'c')
-#         self.assertFalse(provider.load.called)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_load_unknown_canonical_name_raises_error(custom_provider1):
+    provider = credentials.CanonicalNameCredentialSourcer(providers=[
+        custom_provider1])
+    with pytest.raises(botocore.exceptions.UnknownCredentialError):
+        await provider.source_credentials('CustomUnknown')
 
-#     def _assert_returns_creds_if_assume_role_not_used(self, provider):
-#         assume_role_provider = mock.Mock(spec=AssumeRoleProvider)
-#         assume_role_provider.METHOD = 'assume-role'
-#         assume_role_provider.CANONICAL_NAME = None
 
-#         source = credentials.CanonicalNameCredentialSourcer(providers=[
-#             assume_role_provider, provider
-#         ])
+async def _assert_assume_role_creds_returned_with_shared_file(provider, fake_creds):
+    assume_role_provider = mock.Mock(spec=AssumeRoleProvider)
+    assume_role_provider.METHOD = 'assume-role'
+    assume_role_provider.CANONICAL_NAME = None
 
-#         # If the assume role provider returns nothing, then whatever is in
-#         # the config provider should be returned.
-#         assume_role_provider.load.return_value = None
-#         provider.load.return_value = credentials.Credentials(
-#             'd', 'e', 'f'
-#         )
+    source = credentials.CanonicalNameCredentialSourcer(providers=[
+        assume_role_provider, provider
+    ])
 
-#         creds = source.source_credentials(provider.CANONICAL_NAME)
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'd')
-#         self.assertEqual(creds.secret_key, 'e')
-#         self.assertEqual(creds.token, 'f')
-#         self.assertTrue(assume_role_provider.load.called)
+    # If the assume role provider returns credentials, those should be
+    # what is returned.
+    assume_role_provider.load = asynctest.CoroutineMock(return_value=fake_creds)
+    provider.load = asynctest.CoroutineMock(return_value=credentials.Credentials(
+        'd', 'e', 'f'
+    ))
 
-#     def test_assume_role_creds_returned_with_config_file(self):
-#         provider = mock.Mock(spec=ConfigProvider)
-#         provider.METHOD = 'config-file'
-#         provider.CANONICAL_NAME = 'SharedConfig'
-#         self._assert_assume_role_creds_returned_with_shared_file(provider)
+    creds = await source.source_credentials(provider.CANONICAL_NAME)
+    assert creds is not None
+    assert creds.access_key, 'a'
+    assert creds.secret_key, 'b'
+    assert creds.token, 'c'
+    assert provider.load.called is False
 
-#     def test_config_file_returns_creds_if_assume_role_not_used(self):
-#         provider = mock.Mock(spec=ConfigProvider)
-#         provider.METHOD = 'config-file'
-#         provider.CANONICAL_NAME = 'SharedConfig'
-#         self._assert_returns_creds_if_assume_role_not_used(provider)
 
-#     def test_assume_role_creds_returned_with_cred_file(self):
-#         provider = mock.Mock(spec=SharedCredentialProvider)
-#         provider.METHOD = 'credentials-file'
-#         provider.CANONICAL_NAME = 'SharedCredentials'
-#         self._assert_assume_role_creds_returned_with_shared_file(provider)
+async def _assert_returns_creds_if_assume_role_not_used(provider):
+    assume_role_provider = mock.Mock(spec=AssumeRoleProvider)
+    assume_role_provider.METHOD = 'assume-role'
+    assume_role_provider.CANONICAL_NAME = None
 
-#     def test_creds_file_returns_creds_if_assume_role_not_used(self):
-#         provider = mock.Mock(spec=SharedCredentialProvider)
-#         provider.METHOD = 'credentials-file'
-#         provider.CANONICAL_NAME = 'SharedCredentials'
-#         self._assert_returns_creds_if_assume_role_not_used(provider)
+    source = credentials.CanonicalNameCredentialSourcer(providers=[
+        assume_role_provider, provider
+    ])
 
-#     def test_get_canonical_assume_role_without_shared_files(self):
-#         assume_role_provider = mock.Mock(spec=AssumeRoleProvider)
-#         assume_role_provider.METHOD = 'assume-role'
-#         assume_role_provider.CANONICAL_NAME = None
-#         assume_role_provider.load.return_value = self.fake_creds
+    # If the assume role provider returns nothing, then whatever is in
+    # the config provider should be returned.
+    assume_role_provider.load = asynctest.CoroutineMock(return_value=None)
+    provider.load = asynctest.CoroutineMock(return_value=credentials.Credentials(
+        'd', 'e', 'f'
+    ))
 
-#         provider = credentials.CanonicalNameCredentialSourcer(providers=[
-#             assume_role_provider
-#         ])
+    creds = await source.source_credentials(provider.CANONICAL_NAME)
+    assert creds is not None
+    assert creds.access_key == 'd'
+    assert creds.secret_key == 'e'
+    assert creds.token == 'f'
+    assert assume_role_provider.load.called is True
 
-#         creds = provider.source_credentials('SharedConfig')
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertEqual(creds.token, 'c')
 
-#         creds = provider.source_credentials('SharedCredentials')
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertEqual(creds.token, 'c')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_creds_returned_with_config_file(fake_creds):
+    provider = mock.Mock(spec=ConfigProvider)
+    provider.METHOD = 'config-file'
+    provider.CANONICAL_NAME = 'SharedConfig'
+    await _assert_assume_role_creds_returned_with_shared_file(provider, fake_creds)
 
-#     def test_get_canonical_shared_files_without_assume_role(self):
-#         provider = credentials.CanonicalNameCredentialSourcer(
-#             providers=[self.custom_provider1])
-#         with self.assertRaises(botocore.exceptions.UnknownCredentialError):
-#             provider.source_credentials('SharedConfig')
-#         with self.assertRaises(botocore.exceptions.UnknownCredentialError):
-#             provider.source_credentials('SharedCredentials')
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_config_file_returns_creds_if_assume_role_not_used():
+    provider = mock.Mock(spec=ConfigProvider)
+    provider.METHOD = 'config-file'
+    provider.CANONICAL_NAME = 'SharedConfig'
+    await _assert_returns_creds_if_assume_role_not_used(provider)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_creds_returned_with_cred_file(fake_creds):
+    provider = mock.Mock(spec=SharedCredentialProvider)
+    provider.METHOD = 'credentials-file'
+    provider.CANONICAL_NAME = 'SharedCredentials'
+    await _assert_assume_role_creds_returned_with_shared_file(provider, fake_creds)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_creds_file_returns_creds_if_assume_role_not_used():
+    provider = mock.Mock(spec=SharedCredentialProvider)
+    provider.METHOD = 'credentials-file'
+    provider.CANONICAL_NAME = 'SharedCredentials'
+    await _assert_returns_creds_if_assume_role_not_used(provider)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_get_canonical_assume_role_without_shared_files(fake_creds):
+    assume_role_provider = mock.Mock(spec=AssumeRoleProvider)
+    assume_role_provider.METHOD = 'assume-role'
+    assume_role_provider.CANONICAL_NAME = None
+    assume_role_provider.load = asynctest.CoroutineMock(return_value=fake_creds)
+
+    provider = credentials.CanonicalNameCredentialSourcer(providers=[
+        assume_role_provider
+    ])
+
+    creds = await provider.source_credentials('SharedConfig')
+    assert creds is not None
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token == 'c'
+
+    creds = await provider.source_credentials('SharedCredentials')
+    assert creds is not None
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token == 'c'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_get_canonical_shared_files_without_assume_role(custom_provider1):
+    provider = credentials.CanonicalNameCredentialSourcer(
+        providers=[custom_provider1])
+    with pytest.raises(botocore.exceptions.UnknownCredentialError):
+        await provider.source_credentials('SharedConfig')
+    with pytest.raises(botocore.exceptions.UnknownCredentialError):
+        await provider.source_credentials('SharedCredentials')
 
 
 
