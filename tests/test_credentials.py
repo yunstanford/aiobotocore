@@ -1308,39 +1308,48 @@ async def test_load_ec2_credentials_file_exists():
 
 
 
-
-# class TestInstanceMetadataProvider(BaseEnvVar):
-#     def test_load_from_instance_metadata(self):
-#         timeobj = datetime.now(tzlocal())
-#         timestamp = (timeobj + timedelta(hours=24)).isoformat()
-#         fetcher = mock.Mock()
-#         fetcher.retrieve_iam_role_credentials.return_value = {
-#             'access_key': 'a',
-#             'secret_key': 'b',
-#             'token': 'c',
-#             'expiry_time': timestamp,
-#             'role_name': 'myrole',
-#         }
-#         provider = credentials.InstanceMetadataProvider(
-#             iam_role_fetcher=fetcher)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertEqual(creds.token, 'c')
-#         self.assertEqual(creds.method, 'iam-role')
-
-#     def test_no_role_creds_exist(self):
-#         fetcher = mock.Mock()
-#         fetcher.retrieve_iam_role_credentials.return_value = {}
-#         provider = credentials.InstanceMetadataProvider(
-#             iam_role_fetcher=fetcher)
-#         creds = provider.load()
-#         self.assertIsNone(creds)
-#         fetcher.retrieve_iam_role_credentials.assert_called_with()
+######################################
+# class TestInstanceMetadataProvider #
+######################################
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_load_from_instance_metadata():
+    timeobj = datetime.now(tzlocal())
+    timestamp = (timeobj + timedelta(hours=24)).isoformat()
+    fetcher = mock.Mock()
+    fetcher.retrieve_iam_role_credentials = asynctest.CoroutineMock(return_value={
+        'access_key': 'a',
+        'secret_key': 'b',
+        'token': 'c',
+        'expiry_time': timestamp,
+        'role_name': 'myrole',
+    })
+    provider = credentials.InstanceMetadataProvider(
+        iam_role_fetcher=fetcher)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token == 'c'
+    assert creds.method == 'iam-role'
 
 
-# class CredentialResolverTest(BaseEnvVar):
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_no_role_creds_exist():
+    fetcher = mock.Mock()
+    fetcher.retrieve_iam_role_credentials =asynctest.CoroutineMock(return_value={})
+    provider = credentials.InstanceMetadataProvider(
+        iam_role_fetcher=fetcher)
+    creds = await provider.load()
+    assert creds is None
+    fetcher.retrieve_iam_role_credentials.assert_called_with()
+
+
+################################
+# class CredentialResolverTest #
+################################
+
 #     def setUp(self):
 #         super(CredentialResolverTest, self).setUp()
 #         self.provider1 = mock.Mock()
