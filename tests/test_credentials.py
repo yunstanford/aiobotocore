@@ -1022,100 +1022,106 @@ async def test_credentials_throw_error_if_expiry_goes_away():
     with pytest.raises(credentials.PartialCredentialsError):
         await creds.get_frozen_credentials()
 
+#######################################
+# class TestSharedCredentialsProvider #
+#######################################
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credential_file_exists_default_profile():
+    ini_parser = mock.Mock(return_value={
+        'default': {
+            'aws_access_key_id': 'foo',
+            'aws_secret_access_key': 'bar',
+        }
+    })
+    provider = credentials.SharedCredentialProvider(
+        creds_filename='~/.aws/creds', profile_name='default',
+        ini_parser=ini_parser)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token is None
+    assert creds.method == 'shared-credentials-file'
 
 
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_partial_creds_raise_error():
+    ini_parser = mock.Mock(return_value={
+        'default': {
+            'aws_access_key_id': 'foo',
+            # Missing 'aws_secret_access_key'.
+        }
+    })
+    provider = credentials.SharedCredentialProvider(
+        creds_filename='~/.aws/creds', profile_name='default',
+        ini_parser=ini_parser)
+    with pytest.raises(botocore.exceptions.PartialCredentialsError):
+        await provider.load()
 
 
-# class TestSharedCredentialsProvider(BaseEnvVar):
-#     def setUp(self):
-#         super(TestSharedCredentialsProvider, self).setUp()
-#         self.ini_parser = mock.Mock()
-
-#     def test_credential_file_exists_default_profile(self):
-#         self.ini_parser.return_value = {
-#             'default': {
-#                 'aws_access_key_id': 'foo',
-#                 'aws_secret_access_key': 'bar',
-#             }
-#         }
-#         provider = credentials.SharedCredentialProvider(
-#             creds_filename='~/.aws/creds', profile_name='default',
-#             ini_parser=self.ini_parser)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertIsNone(creds.token)
-#         self.assertEqual(creds.method, 'shared-credentials-file')
-
-#     def test_partial_creds_raise_error(self):
-#         self.ini_parser.return_value = {
-#             'default': {
-#                 'aws_access_key_id': 'foo',
-#                 # Missing 'aws_secret_access_key'.
-#             }
-#         }
-#         provider = credentials.SharedCredentialProvider(
-#             creds_filename='~/.aws/creds', profile_name='default',
-#             ini_parser=self.ini_parser)
-#         with self.assertRaises(botocore.exceptions.PartialCredentialsError):
-#             provider.load()
-
-#     def test_credentials_file_exists_with_session_token(self):
-#         self.ini_parser.return_value = {
-#             'default': {
-#                 'aws_access_key_id': 'foo',
-#                 'aws_secret_access_key': 'bar',
-#                 'aws_session_token': 'baz',
-#             }
-#         }
-#         provider = credentials.SharedCredentialProvider(
-#             creds_filename='~/.aws/creds', profile_name='default',
-#             ini_parser=self.ini_parser)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-#         self.assertEqual(creds.method, 'shared-credentials-file')
-
-#     def test_credentials_file_with_multiple_profiles(self):
-#         self.ini_parser.return_value = {
-#             # Here the user has a 'default' and a 'dev' profile.
-#             'default': {
-#                 'aws_access_key_id': 'a',
-#                 'aws_secret_access_key': 'b',
-#                 'aws_session_token': 'c',
-#             },
-#             'dev': {
-#                 'aws_access_key_id': 'd',
-#                 'aws_secret_access_key': 'e',
-#                 'aws_session_token': 'f',
-#             },
-#         }
-#         # And we specify a profile_name of 'dev'.
-#         provider = credentials.SharedCredentialProvider(
-#             creds_filename='~/.aws/creds', profile_name='dev',
-#             ini_parser=self.ini_parser)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'd')
-#         self.assertEqual(creds.secret_key, 'e')
-#         self.assertEqual(creds.token, 'f')
-#         self.assertEqual(creds.method, 'shared-credentials-file')
-
-#     def test_credentials_file_does_not_exist_returns_none(self):
-#         # It's ok if the credentials file does not exist, we should
-#         # just catch the appropriate errors and return None.
-#         self.ini_parser.side_effect = botocore.exceptions.ConfigNotFound(
-#             path='foo')
-#         provider = credentials.SharedCredentialProvider(
-#             creds_filename='~/.aws/creds', profile_name='dev',
-#             ini_parser=self.ini_parser)
-#         creds = provider.load()
-#         self.assertIsNone(creds)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_file_exists_with_session_token():
+    ini_parser = mock.Mock(return_value={
+        'default': {
+            'aws_access_key_id': 'foo',
+            'aws_secret_access_key': 'bar',
+            'aws_session_token': 'baz',
+        }
+    })
+    provider = credentials.SharedCredentialProvider(
+        creds_filename='~/.aws/creds', profile_name='default',
+        ini_parser=ini_parser)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+    assert creds.method == 'shared-credentials-file'
 
 
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_file_with_multiple_profiles():
+    ini_parser = mock.Mock(return_value={
+        # Here the user has a 'default' and a 'dev' profile.
+        'default': {
+            'aws_access_key_id': 'a',
+            'aws_secret_access_key': 'b',
+            'aws_session_token': 'c',
+        },
+        'dev': {
+            'aws_access_key_id': 'd',
+            'aws_secret_access_key': 'e',
+            'aws_session_token': 'f',
+        },
+    })
+    # And we specify a profile_name of 'dev'.
+    provider = credentials.SharedCredentialProvider(
+        creds_filename='~/.aws/creds', profile_name='dev',
+        ini_parser=ini_parser)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'd'
+    assert creds.secret_key == 'e'
+    assert creds.token == 'f'
+    assert creds.method == 'shared-credentials-file'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credentials_file_does_not_exist_returns_none():
+    # It's ok if the credentials file does not exist, we should
+    # just catch the appropriate errors and return None.
+    ini_parser = mock.Mock(side_effect=botocore.exceptions.ConfigNotFound(
+        path='foo'))
+    provider = credentials.SharedCredentialProvider(
+        creds_filename='~/.aws/creds', profile_name='dev',
+        ini_parser=ini_parser)
+    creds = await provider.load()
+    assert creds is None
 
 
 # class TestConfigFileProvider(BaseEnvVar):
