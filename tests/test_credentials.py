@@ -1123,64 +1123,76 @@ async def test_credentials_file_does_not_exist_returns_none():
     creds = await provider.load()
     assert creds is None
 
+################################
+# class TestConfigFileProvider #
+################################
+@pytest.fixture
+def config_file_parser():
+    profile_config = {
+        'aws_access_key_id': 'a',
+        'aws_secret_access_key': 'b',
+        'aws_session_token': 'c',
+        # Non creds related configs can be in a session's # config.
+        'region': 'us-west-2',
+        'output': 'json',
+    }
+    parsed = {'profiles': {'default': profile_config}}
+    parser = mock.Mock()
+    parser.return_value = parsed
+    return parser
 
-# class TestConfigFileProvider(BaseEnvVar):
 
-#     def setUp(self):
-#         super(TestConfigFileProvider, self).setUp()
-#         profile_config = {
-#             'aws_access_key_id': 'a',
-#             'aws_secret_access_key': 'b',
-#             'aws_session_token': 'c',
-#             # Non creds related configs can be in a session's # config.
-#             'region': 'us-west-2',
-#             'output': 'json',
-#         }
-#         parsed = {'profiles': {'default': profile_config}}
-#         parser = mock.Mock()
-#         parser.return_value = parsed
-#         self.parser = parser
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_config_file_exists(config_file_parser):
+    provider = credentials.ConfigProvider('cli.cfg', 'default',
+                                          config_file_parser)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token == 'c'
+    assert creds.method == 'config-file'
 
-#     def test_config_file_exists(self):
-#         provider = credentials.ConfigProvider('cli.cfg', 'default',
-#                                               self.parser)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertEqual(creds.token, 'c')
-#         self.assertEqual(creds.method, 'config-file')
 
-#     def test_config_file_missing_profile_config(self):
-#         # Referring to a profile that's not in the config file
-#         # will result in session.config returning an empty dict.
-#         profile_name = 'NOT-default'
-#         provider = credentials.ConfigProvider('cli.cfg', profile_name,
-#                                               self.parser)
-#         creds = provider.load()
-#         self.assertIsNone(creds)
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_config_file_missing_profile_config(config_file_parser):
+    # Referring to a profile that's not in the config file
+    # will result in session.config returning an empty dict.
+    profile_name = 'NOT-default'
+    provider = credentials.ConfigProvider('cli.cfg', profile_name,
+                                          config_file_parser)
+    creds = await provider.load()
+    assert creds is None
 
-#     def test_config_file_errors_ignored(self):
-#         # We should move on to the next provider if the config file
-#         # can't be found.
-#         self.parser.side_effect = botocore.exceptions.ConfigNotFound(
-#             path='cli.cfg')
-#         provider = credentials.ConfigProvider('cli.cfg', 'default',
-#                                               self.parser)
-#         creds = provider.load()
-#         self.assertIsNone(creds)
 
-#     def test_partial_creds_is_error(self):
-#         profile_config = {
-#             'aws_access_key_id': 'a',
-#             # Missing aws_secret_access_key
-#         }
-#         parsed = {'profiles': {'default': profile_config}}
-#         parser = mock.Mock()
-#         parser.return_value = parsed
-#         provider = credentials.ConfigProvider('cli.cfg', 'default', parser)
-#         with self.assertRaises(botocore.exceptions.PartialCredentialsError):
-#             provider.load()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_config_file_errors_ignored(config_file_parser):
+    # We should move on to the next provider if the config file
+    # can't be found.
+    config_file_parser.side_effect = botocore.exceptions.ConfigNotFound(
+        path='cli.cfg')
+    provider = credentials.ConfigProvider('cli.cfg', 'default',
+                                          config_file_parser)
+    creds = await provider.load()
+    assert creds is None
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_partial_creds_is_error():
+    profile_config = {
+        'aws_access_key_id': 'a',
+        # Missing aws_secret_access_key
+    }
+    parsed = {'profiles': {'default': profile_config}}
+    parser = mock.Mock()
+    parser.return_value = parsed
+    provider = credentials.ConfigProvider('cli.cfg', 'default', parser)
+    with pytest.raises(botocore.exceptions.PartialCredentialsError):
+        await provider.load()
 
 
 # class TestBotoProvider(BaseEnvVar):
