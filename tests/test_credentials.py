@@ -1499,65 +1499,88 @@ async def test_provider_unknown(provider1, provider2):
 ######################################
 # class TestCreateCredentialResolver #
 ######################################
+@pytest.fixture
+def session_instance_vars():
+    return {
+            'credentials_file': 'a',
+            'legacy_config_file': 'b',
+            'config_file': 'c',
+            'metadata_service_timeout': 'd',
+            'metadata_service_num_attempts': 'e',
+        }
 
-#     def setUp(self):
-#         super(TestCreateCredentialResolver, self).setUp()
 
-#         self.session = mock.Mock()
-#         self.session_instance_vars = {
-#             'credentials_file': 'a',
-#             'legacy_config_file': 'b',
-#             'config_file': 'c',
-#             'metadata_service_timeout': 'd',
-#             'metadata_service_num_attempts': 'e',
-#         }
-#         self.fake_env_vars = {}
-#         self.session.get_config_variable = self.fake_get_config_variable
+@pytest.fixture
+def fake_env_vars():
+    return {}
 
-#     def fake_get_config_variable(self, name, methods=None):
-#         if methods == ('instance',):
-#             return self.session_instance_vars.get(name)
-#         elif methods is not None and 'env' in methods:
-#             return self.fake_env_vars.get(name)
 
-#     def test_create_credential_resolver(self):
-#         resolver = credentials.create_credential_resolver(self.session)
-#         self.assertIsInstance(resolver, credentials.CredentialResolver)
+@pytest.fixture
+def session(session_instance_vars, fake_env_vars):
+    def fake_get_config_variable(name, methods=None):
+        if methods == ('instance',):
+            return session_instance_vars.get(name)
+        elif methods is not None and 'env' in methods:
+            return fake_env_vars.get(name)
+    session = mock.Mock()
+    session.get_config_variable = fake_get_config_variable
+    return session
 
-#     def test_explicit_profile_ignores_env_provider(self):
-#         self.session_instance_vars['profile'] = 'dev'
-#         resolver = credentials.create_credential_resolver(self.session)
 
-#         self.assertTrue(
-#             all(not isinstance(p, EnvProvider) for p in resolver.providers))
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_create_credential_resolver(session):
+    resolver = credentials.create_credential_resolver(session)
+    assert isinstance(resolver, credentials.CredentialResolver) is True
 
-#     def test_no_profile_checks_env_provider(self):
-#         # If no profile is provided,
-#         self.session_instance_vars.pop('profile', None)
-#         resolver = credentials.create_credential_resolver(self.session)
-#         # Then an EnvProvider should be part of our credential lookup chain.
-#         self.assertTrue(
-#             any(isinstance(p, EnvProvider) for p in resolver.providers))
 
-#     def test_env_provider_added_if_profile_from_env_set(self):
-#         self.fake_env_vars['profile'] = 'profile-from-env'
-#         resolver = credentials.create_credential_resolver(self.session)
-#         self.assertTrue(
-#             any(isinstance(p, EnvProvider) for p in resolver.providers))
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_explicit_profile_ignores_env_provider(session_instance_vars, session):
+    session_instance_vars['profile'] = 'dev'
+    resolver = credentials.create_credential_resolver(session)
 
-#     def test_default_cache(self):
-#         resolver = credentials.create_credential_resolver(self.session)
-#         cache = resolver.get_provider('assume-role').cache
-#         self.assertIsInstance(cache, dict)
-#         self.assertEqual(cache, {})
+    assert all(not isinstance(p, EnvProvider) for p in resolver.providers) is True
 
-#     def test_custom_cache(self):
-#         custom_cache = credentials.JSONFileCache()
-#         resolver = credentials.create_credential_resolver(
-#             self.session, custom_cache
-#         )
-#         cache = resolver.get_provider('assume-role').cache
-#         self.assertIs(cache, custom_cache)
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_no_profile_checks_env_provider(session_instance_vars, session):
+    # If no profile is provided,
+    session_instance_vars.pop('profile', None)
+    resolver = credentials.create_credential_resolver(session)
+    # Then an EnvProvider should be part of our credential lookup chain.
+    assert any(isinstance(p, EnvProvider) for p in resolver.providers) is True
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_env_provider_added_if_profile_from_env_set(session, fake_env_vars):
+    fake_env_vars['profile'] = 'profile-from-env'
+    resolver = credentials.create_credential_resolver(session, fake_env_vars)
+    assert any(isinstance(p, EnvProvider) for p in resolver.providers) is True
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_default_cache(session):
+    resolver = credentials.create_credential_resolver(session)
+    cache = resolver.get_provider('assume-role').cache
+    assert isinstance(cache, dict) is True
+    assert cache == {}
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_custom_cache(session):
+    custom_cache = credentials.JSONFileCache()
+    resolver = credentials.create_credential_resolver(
+        session, custom_cache
+    )
+    cache = resolver.get_provider('assume-role').cache
+    assert cache is custom_cache
+
+
 
 
 # class TestCanonicalNameSourceProvider(BaseEnvVar):
@@ -1692,6 +1715,8 @@ async def test_provider_unknown(provider1, provider2):
 #             provider.source_credentials('SharedConfig')
 #         with self.assertRaises(botocore.exceptions.UnknownCredentialError):
 #             provider.source_credentials('SharedCredentials')
+
+
 
 
 # class TestAssumeRoleCredentialProvider(unittest.TestCase):
