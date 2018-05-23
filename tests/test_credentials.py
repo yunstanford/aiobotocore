@@ -1275,32 +1275,38 @@ async def test_partial_creds_is_error():
         await provider.load()
 
 
+#################################
+# class TestOriginalEC2Provider #
+#################################
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_load_ec2_credentials_file_not_exist():
+    provider = credentials.OriginalEC2Provider(environ={})
+    creds = await provider.load()
+    assert creds is None
 
 
-# class TestOriginalEC2Provider(BaseEnvVar):
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_load_ec2_credentials_file_exists():
+    environ = {
+        'AWS_CREDENTIAL_FILE': 'foo.cfg',
+    }
+    parser = mock.Mock()
+    parser.return_value = {
+        'AWSAccessKeyId': 'a',
+        'AWSSecretKey': 'b',
+    }
+    provider = credentials.OriginalEC2Provider(environ=environ,
+                                               parser=parser)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token is None
+    assert creds.method == 'ec2-credentials-file'
 
-#     def test_load_ec2_credentials_file_not_exist(self):
-#         provider = credentials.OriginalEC2Provider(environ={})
-#         creds = provider.load()
-#         self.assertIsNone(creds)
 
-#     def test_load_ec2_credentials_file_exists(self):
-#         environ = {
-#             'AWS_CREDENTIAL_FILE': 'foo.cfg',
-#         }
-#         parser = mock.Mock()
-#         parser.return_value = {
-#             'AWSAccessKeyId': 'a',
-#             'AWSSecretKey': 'b',
-#         }
-#         provider = credentials.OriginalEC2Provider(environ=environ,
-#                                                    parser=parser)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertIsNone(creds.token)
-#         self.assertEqual(creds.method, 'ec2-credentials-file')
 
 
 # class TestInstanceMetadataProvider(BaseEnvVar):
