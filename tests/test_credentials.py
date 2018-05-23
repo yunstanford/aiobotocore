@@ -1338,7 +1338,7 @@ async def test_load_from_instance_metadata():
 @pytest.mark.asyncio
 async def test_no_role_creds_exist():
     fetcher = mock.Mock()
-    fetcher.retrieve_iam_role_credentials =asynctest.CoroutineMock(return_value={})
+    fetcher.retrieve_iam_role_credentials = asynctest.CoroutineMock(return_value={})
     provider = credentials.InstanceMetadataProvider(
         iam_role_fetcher=fetcher)
     creds = await provider.load()
@@ -1349,124 +1349,157 @@ async def test_no_role_creds_exist():
 ################################
 # class CredentialResolverTest #
 ################################
-
-#     def setUp(self):
-#         super(CredentialResolverTest, self).setUp()
-#         self.provider1 = mock.Mock()
-#         self.provider1.METHOD = 'provider1'
-#         self.provider1.CANONICAL_NAME = 'CustomProvider1'
-#         self.provider2 = mock.Mock()
-#         self.provider2.METHOD = 'provider2'
-#         self.provider2.CANONICAL_NAME = 'CustomProvider2'
-#         self.fake_creds = credentials.Credentials('a', 'b', 'c')
-
-#     def test_load_credentials_single_provider(self):
-#         self.provider1.load.return_value = self.fake_creds
-#         resolver = credentials.CredentialResolver(providers=[self.provider1])
-#         creds = resolver.load_credentials()
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertEqual(creds.token, 'c')
-
-#     def test_get_provider_by_name(self):
-#         resolver = credentials.CredentialResolver(providers=[self.provider1])
-#         result = resolver.get_provider('provider1')
-#         self.assertIs(result, self.provider1)
-
-#     def test_get_unknown_provider_raises_error(self):
-#         resolver = credentials.CredentialResolver(providers=[self.provider1])
-#         with self.assertRaises(botocore.exceptions.UnknownCredentialError):
-#             resolver.get_provider('unknown-foo')
-
-#     def test_first_credential_non_none_wins(self):
-#         self.provider1.load.return_value = None
-#         self.provider2.load.return_value = self.fake_creds
-#         resolver = credentials.CredentialResolver(providers=[self.provider1,
-#                                                              self.provider2])
-#         creds = resolver.load_credentials()
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertEqual(creds.token, 'c')
-#         self.provider1.load.assert_called_with()
-#         self.provider2.load.assert_called_with()
-
-#     def test_no_creds_loaded(self):
-#         self.provider1.load.return_value = None
-#         self.provider2.load.return_value = None
-#         resolver = credentials.CredentialResolver(providers=[self.provider1,
-#                                                              self.provider2])
-#         creds = resolver.load_credentials()
-#         self.assertIsNone(creds)
-
-#     def test_inject_additional_providers_after_existing(self):
-#         self.provider1.load.return_value = None
-#         self.provider2.load.return_value = self.fake_creds
-#         resolver = credentials.CredentialResolver(providers=[self.provider1,
-#                                                              self.provider2])
-#         # Now, if we were to call resolver.load() now, provider2 would
-#         # win because it's returning a non None response.
-#         # However we can inject a new provider before provider2 to
-#         # override this process.
-#         # Providers can be added by the METHOD name of each provider.
-#         new_provider = mock.Mock()
-#         new_provider.METHOD = 'new_provider'
-#         new_provider.load.return_value = credentials.Credentials('d', 'e', 'f')
-
-#         resolver.insert_after('provider1', new_provider)
-
-#         creds = resolver.load_credentials()
-#         self.assertIsNotNone(creds)
-
-#         self.assertEqual(creds.access_key, 'd')
-#         self.assertEqual(creds.secret_key, 'e')
-#         self.assertEqual(creds.token, 'f')
-#         # Provider 1 should have been called, but provider2 should
-#         # *not* have been called because new_provider already returned
-#         # a non-None response.
-#         self.provider1.load.assert_called_with()
-#         self.assertTrue(not self.provider2.called)
-
-#     def test_inject_provider_before_existing(self):
-#         new_provider = mock.Mock()
-#         new_provider.METHOD = 'override'
-#         new_provider.load.return_value = credentials.Credentials('x', 'y', 'z')
-
-#         resolver = credentials.CredentialResolver(providers=[self.provider1,
-#                                                              self.provider2])
-#         resolver.insert_before(self.provider1.METHOD, new_provider)
-#         creds = resolver.load_credentials()
-#         self.assertEqual(creds.access_key, 'x')
-#         self.assertEqual(creds.secret_key, 'y')
-#         self.assertEqual(creds.token, 'z')
-
-#     def test_can_remove_providers(self):
-#         self.provider1.load.return_value = credentials.Credentials(
-#             'a', 'b', 'c')
-#         self.provider2.load.return_value = credentials.Credentials(
-#             'd', 'e', 'f')
-#         resolver = credentials.CredentialResolver(providers=[self.provider1,
-#                                                              self.provider2])
-#         resolver.remove('provider1')
-#         creds = resolver.load_credentials()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'd')
-#         self.assertEqual(creds.secret_key, 'e')
-#         self.assertEqual(creds.token, 'f')
-#         self.assertTrue(not self.provider1.load.called)
-#         self.provider2.load.assert_called_with()
-
-#     def test_provider_unknown(self):
-#         resolver = credentials.CredentialResolver(providers=[self.provider1,
-#                                                              self.provider2])
-#         # No error is raised if you try to remove an unknown provider.
-#         resolver.remove('providerFOO')
-#         # But an error IS raised if you try to insert after an unknown
-#         # provider.
-#         with self.assertRaises(botocore.exceptions.UnknownCredentialError):
-#             resolver.insert_after('providerFoo', None)
+@pytest.fixture
+def fake_creds():
+    return credentials.Credentials('a', 'b', 'c')
 
 
-# class TestCreateCredentialResolver(BaseEnvVar):
+@pytest.fixture
+def provider1():
+    provider1 = mock.Mock()
+    provider1.METHOD = 'provider1'
+    provider1.CANONICAL_NAME = 'CustomProvider1'
+    return provider1
+
+
+@pytest.fixture
+def provider2():
+    provider2 = mock.Mock()
+    provider2.METHOD = 'provider2'
+    provider2.CANONICAL_NAME = 'CustomProvider2'
+    return provider2
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_load_credentials_single_provider(fake_creds, provider1):
+    provider1.load = asynctest.CoroutineMock(return_value=fake_creds)
+    resolver = credentials.CredentialResolver(providers=[provider1])
+    creds = await resolver.load_credentials()
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token == 'c'
+
+
+@pytest.mark.moto
+def test_get_provider_by_name(provider1):
+    resolver = credentials.CredentialResolver(providers=[provider1])
+    result = resolver.get_provider('provider1')
+    assert result is provider1
+
+
+@pytest.mark.moto
+def test_get_unknown_provider_raises_error(provider1):
+    resolver = credentials.CredentialResolver(providers=[provider1])
+    with pytest.raises(botocore.exceptions.UnknownCredentialError):
+        resolver.get_provider('unknown-foo')
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_first_credential_non_none_wins(provider1, provider2, fake_creds):
+    provider1.load = asynctest.CoroutineMock(return_value=None)
+    provider2.load = asynctest.CoroutineMock(return_value=fake_creds)
+    resolver = credentials.CredentialResolver(providers=[provider1, provider2])
+    creds = await resolver.load_credentials()
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token ==  'c'
+    provider1.load.assert_called_with()
+    provider2.load.assert_called_with()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_no_creds_loaded(provider1, provider2):
+    provider1.load = asynctest.CoroutineMock(return_value=None)
+    provider2.load = asynctest.CoroutineMock(return_value=None)
+    resolver = credentials.CredentialResolver(providers=[provider1, provider2])
+    creds = await resolver.load_credentials()
+    assert creds is None
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_inject_additional_providers_after_existing(provider1, provider2, fake_creds):
+    provider1.load = asynctest.CoroutineMock(return_value=None)
+    provider2.load = asynctest.CoroutineMock(return_value=fake_creds)
+    resolver = credentials.CredentialResolver(providers=[provider1, provider2])
+    # Now, if we were to call resolver.load() now, provider2 would
+    # win because it's returning a non None response.
+    # However we can inject a new provider before provider2 to
+    # override this process.
+    # Providers can be added by the METHOD name of each provider.
+    new_provider = mock.Mock()
+    new_provider.METHOD = 'new_provider'
+
+    new_provider.load =asynctest.CoroutineMock(return_value=credentials.Credentials('d', 'e', 'f'))
+
+    resolver.insert_after('provider1', new_provider)
+
+    creds = await resolver.load_credentials()
+    assert creds is not None
+
+    assert creds.access_key == 'd'
+    assert creds.secret_key == 'e'
+    assert creds.token == 'f'
+    # Provider 1 should have been called, but provider2 should
+    # *not* have been called because new_provider already returned
+    # a non-None response.
+    provider1.load.assert_called_with()
+    assert provider2.called is False
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_inject_provider_before_existing(provider1, provider2):
+    new_provider = mock.Mock()
+    new_provider.METHOD = 'override'
+
+    new_provider.load = asynctest.CoroutineMock(return_value=credentials.Credentials('x', 'y', 'z'))
+
+    resolver = credentials.CredentialResolver(providers=[provider1, provider2])
+    resolver.insert_before(provider1.METHOD, new_provider)
+    creds = await resolver.load_credentials()
+    assert creds.access_key == 'x'
+    assert creds.secret_key == 'y'
+    assert creds.token == 'z'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_remove_providers(provider1, provider2):
+    provider1.load = asynctest.CoroutineMock(return_value=credentials.Credentials(
+        'a', 'b', 'c'))
+    provider2.load= asynctest.CoroutineMock(return_value=credentials.Credentials(
+        'd', 'e', 'f'))
+    resolver = credentials.CredentialResolver(providers=[provider1, provider2])
+    resolver.remove('provider1')
+    creds = await resolver.load_credentials()
+    assert creds is not None
+    assert creds.access_key == 'd'
+    assert creds.secret_key == 'e'
+    assert creds.token == 'f'
+    assert provider1.load.called is False
+    provider2.load.assert_called_with()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_provider_unknown(provider1, provider2):
+    resolver = credentials.CredentialResolver(providers=[provider1, provider2])
+    # No error is raised if you try to remove an unknown provider.
+    resolver.remove('providerFOO')
+    # But an error IS raised if you try to insert after an unknown
+    # provider.
+    with pytest.raises(botocore.exceptions.UnknownCredentialError):
+        resolver.insert_after('providerFoo', None)
+
+
+######################################
+# class TestCreateCredentialResolver #
+######################################
+
 #     def setUp(self):
 #         super(TestCreateCredentialResolver, self).setUp()
 
