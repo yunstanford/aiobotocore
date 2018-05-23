@@ -1195,75 +1195,86 @@ async def test_partial_creds_is_error():
         await provider.load()
 
 
-# class TestBotoProvider(BaseEnvVar):
-#     def setUp(self):
-#         super(TestBotoProvider, self).setUp()
-#         self.ini_parser = mock.Mock()
+##########################
+# class TestBotoProvider #
+##########################
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_boto_config_file_exists_in_home_dir():
+    environ = {}
+    ini_parser = mock.Mock(return_value={
+        'Credentials': {
+            # boto's config file does not support a session token
+            # so we only test for access_key/secret_key.
+            'aws_access_key_id': 'a',
+            'aws_secret_access_key': 'b',
+        }
+    })
+    provider = credentials.BotoProvider(environ=environ,
+                                        ini_parser=ini_parser)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token is None
+    assert creds.method == 'boto-config'
 
-#     def test_boto_config_file_exists_in_home_dir(self):
-#         environ = {}
-#         self.ini_parser.return_value = {
-#             'Credentials': {
-#                 # boto's config file does not support a session token
-#                 # so we only test for access_key/secret_key.
-#                 'aws_access_key_id': 'a',
-#                 'aws_secret_access_key': 'b',
-#             }
-#         }
-#         provider = credentials.BotoProvider(environ=environ,
-#                                             ini_parser=self.ini_parser)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertIsNone(creds.token)
-#         self.assertEqual(creds.method, 'boto-config')
 
-#     def test_env_var_set_for_boto_location(self):
-#         environ = {
-#             'BOTO_CONFIG': 'alternate-config.cfg'
-#         }
-#         self.ini_parser.return_value = {
-#             'Credentials': {
-#                 # boto's config file does not support a session token
-#                 # so we only test for access_key/secret_key.
-#                 'aws_access_key_id': 'a',
-#                 'aws_secret_access_key': 'b',
-#             }
-#         }
-#         provider = credentials.BotoProvider(environ=environ,
-#                                             ini_parser=self.ini_parser)
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'a')
-#         self.assertEqual(creds.secret_key, 'b')
-#         self.assertIsNone(creds.token)
-#         self.assertEqual(creds.method, 'boto-config')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_env_var_set_for_boto_location():
+    environ = {
+        'BOTO_CONFIG': 'alternate-config.cfg'
+    }
+    ini_parser = mock.Mock(return_value={
+        'Credentials': {
+            # boto's config file does not support a session token
+            # so we only test for access_key/secret_key.
+            'aws_access_key_id': 'a',
+            'aws_secret_access_key': 'b',
+        }
+    })
+    provider = credentials.BotoProvider(environ=environ,
+                                        ini_parser=ini_parser)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'a'
+    assert creds.secret_key == 'b'
+    assert creds.token is None
+    assert creds.method == 'boto-config'
 
-#         # Assert that the parser was called with the filename specified
-#         # in the env var.
-#         self.ini_parser.assert_called_with('alternate-config.cfg')
+    # Assert that the parser was called with the filename specified
+    # in the env var.
+    ini_parser.assert_called_with('alternate-config.cfg')
 
-#     def test_no_boto_config_file_exists(self):
-#         self.ini_parser.side_effect = botocore.exceptions.ConfigNotFound(
-#             path='foo')
-#         provider = credentials.BotoProvider(environ={},
-#                                             ini_parser=self.ini_parser)
-#         creds = provider.load()
-#         self.assertIsNone(creds)
 
-#     def test_partial_creds_is_error(self):
-#         ini_parser = mock.Mock()
-#         ini_parser.return_value = {
-#             'Credentials': {
-#                 'aws_access_key_id': 'a',
-#                 # Missing aws_secret_access_key.
-#             }
-#         }
-#         provider = credentials.BotoProvider(environ={},
-#                                             ini_parser=ini_parser)
-#         with self.assertRaises(botocore.exceptions.PartialCredentialsError):
-#             provider.load()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_no_boto_config_file_exists():
+    ini_parser = mock.Mock(side_effect=botocore.exceptions.ConfigNotFound(
+        path='foo'))
+    provider = credentials.BotoProvider(environ={},
+                                        ini_parser=ini_parser)
+    creds = await provider.load()
+    assert creds is None
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_partial_creds_is_error():
+    ini_parser = mock.Mock()
+    ini_parser.return_value = {
+        'Credentials': {
+            'aws_access_key_id': 'a',
+            # Missing aws_secret_access_key.
+        }
+    }
+    provider = credentials.BotoProvider(environ={},
+                                        ini_parser=ini_parser)
+    with pytest.raises(botocore.exceptions.PartialCredentialsError):
+        await provider.load()
+
+
 
 
 # class TestOriginalEC2Provider(BaseEnvVar):
