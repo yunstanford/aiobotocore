@@ -150,8 +150,8 @@ def _serialize_if_needed(value, iso=False):
 
 
 def create_assume_role_refresher(client, params):
-    def refresh():
-        response = client.assume_role(**params)
+    async def refresh():
+        response = await client.assume_role(**params)
         credentials = response['Credentials']
         # We need to normalize the credential names to
         # the values expected by the refresh creds.
@@ -1193,7 +1193,7 @@ class AssumeRoleProvider(CredentialProvider):
         profiles = self._loaded_config.get('profiles', {})
         profile = profiles.get(self._profile_name, {})
         if self._has_assume_role_config_vars(profile):
-            return self._load_creds_via_assume_role(self._profile_name)
+            return await self._load_creds_via_assume_role(self._profile_name)
 
     def _has_assume_role_config_vars(self, profile):
         return self.ROLE_CONFIG_VAR in profile
@@ -1232,11 +1232,13 @@ class AssumeRoleProvider(CredentialProvider):
         # The initial credentials are empty and the expiration time is set
         # to now so that we can delay the call to assume role until it is
         # strictly needed.
-        return DeferredRefreshableCredentials(
+        deferred_cred = DeferredRefreshableCredentials(
             method=self.METHOD,
             refresh_using=refresher,
             time_fetcher=_local_now
         )
+        await deferred_cred._refresh()
+        return deferred_cred
 
     def _get_role_config(self, profile_name):
         """Retrieves and validates the role configuration for the profile."""

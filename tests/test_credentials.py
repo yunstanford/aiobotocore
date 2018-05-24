@@ -1619,7 +1619,7 @@ async def test_load_source_credentials_case_insensitive(custom_provider1, custom
         custom_provider1, custom_provider2
     ])
     custom_provider1.load = asynctest.CoroutineMock(return_value=fake_creds)
-    result = provider.source_credentials('cUsToMpRoViDeR1')
+    result = await provider.source_credentials('cUsToMpRoViDeR1')
     assert result is fake_creds
 
 
@@ -1753,697 +1753,778 @@ async def test_get_canonical_shared_files_without_assume_role(custom_provider1):
 
 
 
+##########################################
+# class TestAssumeRoleCredentialProvider #
+##########################################
+@pytest.fixture
+def fake_config():
+    return {
+        'profiles': {
+            'development': {
+                'role_arn': 'myrole',
+                'source_profile': 'longterm',
+            },
+            'longterm': {
+                'aws_access_key_id': 'akid',
+                'aws_secret_access_key': 'skid',
+            },
+            'non-static': {
+                'role_arn': 'myrole',
+                'credential_source': 'Environment'
+            },
+            'chained': {
+                'role_arn': 'chained-role',
+                'source_profile': 'development'
+            }
+        }
+    }
+
+
+def create_config_loader(fake_config, with_config=None):
+    if with_config is None:
+        with_config = fake_config
+    load_config = mock.Mock()
+    load_config.return_value = with_config
+    return load_config
+
+
+def create_client_creator(with_response):
+    # Create a mock sts client that returns a specific response
+    # for assume_role.
+    client = mock.Mock()
+    if isinstance(with_response, list):
+        client.assume_role = asynctest.CoroutineMock(side_effect=with_response)
+    else:
+        client.assume_role = asynctest.CoroutineMock(return_value=with_response)
+    return mock.Mock(return_value=client)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_with_no_cache(fake_config):
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        client_creator, cache={}, profile_name='development')
+
+    creds = await provider.load()
+
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_with_datetime(fake_config):
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            # Note the lack of isoformat(), we're using
+            # a datetime.datetime type.  This will ensure
+            # we test both parsing as well as serializing
+            # from a given datetime because the credentials
+            # are immediately expired.
+            'Expiration': datetime.now(tzlocal()) + timedelta(hours=20)
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        client_creator, cache={}, profile_name='development')
+
+    creds = await provider.load()
+
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_refresher_serializes_datetime(fake_config):
+    client = mock.Mock()
+    time_zone = tzutc()
+    expiration = datetime(
+        year=2016, month=11, day=6, hour=1, minute=30, tzinfo=time_zone)
+    client.assume_role = asynctest.CoroutineMock(return_value={
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': expiration,
+        }
+    })
+    refresh = create_assume_role_refresher(client, {})
+    expiry_time = refresh()['expiry_time']
+    assert expiry_time == '2016-11-06T01:30:00UTC'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_retrieves_from_cache(fake_config):
+    date_in_future = datetime.utcnow() + timedelta(seconds=1000)
+    utc_timestamp = date_in_future.isoformat() + 'Z'
+    fake_config['profiles']['development']['role_arn'] = 'myrole'
+
+    cache_key = (
+        '793d6e2f27667ab2da104824407e486bfec24a47'
+    )
+    cache = {
+        cache_key: {
+            'Credentials': {
+                'AccessKeyId': 'foo-cached',
+                'SecretAccessKey': 'bar-cached',
+                'SessionToken': 'baz-cached',
+                'Expiration': utc_timestamp,
+            }
+        }
+    }
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config), mock.Mock(),
+        cache=cache, profile_name='development')
+
+    creds = await provider.load()
+
+    assert creds.access_key == 'foo-cached'
+    assert creds.secret_key == 'bar-cached'
+    assert creds.token == 'baz-cached'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_chain_prefers_cache(fake_config):
+    date_in_future = datetime.utcnow() + timedelta(seconds=1000)
+    utc_timestamp = date_in_future.isoformat() + 'Z'
+
+    # The profile we will be using has a cache entry, but the profile it
+    # is sourcing from does not. This should result in the cached
+    # credentials being used, and the source profile not being called.
+    cache_key = (
+        '3d440bf424caf7a5ee664fbf89139a84409f95c2'
+    )
+    cache = {
+        cache_key: {
+            'Credentials': {
+                'AccessKeyId': 'foo-cached',
+                'SecretAccessKey': 'bar-cached',
+                'SessionToken': 'baz-cached',
+                'Expiration': utc_timestamp,
+            }
+        }
+    }
+    expiration_in_future = datetime.utcnow() + timedelta(seconds=3000)
+    expiration = expiration_in_future.isoformat() + 'Z'
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': expiration,
+        }
+    }
+    client_creator = create_client_creator(with_response=response)
+
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config), client_creator,
+        cache=cache, profile_name='chained')
+
+    creds = await provider.load()
+
+    assert creds.access_key == 'foo-cached'
+    assert creds.secret_key == 'bar-cached'
+    assert creds.token == 'baz-cached'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_cache_key_is_windows_safe(fake_config):
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    cache = {}
+    fake_config['profiles']['development']['role_arn'] = (
+        'arn:aws:iam::foo-role')
+
+    client_creator = create_client_creator(with_response=response)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        client_creator, cache=cache, profile_name='development')
+
+    await (await provider.load()).get_frozen_credentials()
+    # On windows, you cannot use a a ':' in the filename, so
+    # we need to make sure it doesn't come up in the cache key.
+    cache_key = (
+        '3f8e35c8dca6211d496e830a2de723b2387921e3'
+    )
+    assert cache_key in cache
+    assert cache[cache_key] == response
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_cache_key_with_role_session_name(fake_config):
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    cache = {}
+    fake_config['profiles']['development']['role_arn'] = (
+        'arn:aws:iam::foo-role')
+    fake_config['profiles']['development']['role_session_name'] = (
+        'foo_role_session_name')
+
+    client_creator = create_client_creator(with_response=response)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        client_creator, cache=cache, profile_name='development')
+
+    # The credentials won't actually be assumed until they're requested.
+    await (await provider.load()).get_frozen_credentials()
+
+    cache_key = (
+        '5e75ce21b6a64ab183b29c4a159b6f0248121d51'
+    )
+    assert cache_key in cache
+    assert cache[cache_key] == response
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_in_cache_but_expired(fake_config):
+    expired_creds = datetime.now(tzlocal())
+    valid_creds = expired_creds + timedelta(hours=1)
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': valid_creds,
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+    cache = {
+        'development--myrole': {
+            'Credentials': {
+                'AccessKeyId': 'foo-cached',
+                'SecretAccessKey': 'bar-cached',
+                'SessionToken': 'baz-cached',
+                'Expiration': expired_creds,
+            }
+        }
+    }
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config), client_creator,
+        cache=cache, profile_name='development')
+
+    creds = await provider.load()
+
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_role_session_name_provided(fake_config):
+    dev_profile = fake_config['profiles']['development']
+    dev_profile['role_session_name'] = 'myname'
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        client_creator, cache={}, profile_name='development')
+
+    # The credentials won't actually be assumed until they're requested.
+    await (await provider.load()).get_frozen_credentials()
+
+    client = client_creator.return_value
+    client.assume_role.assert_called_with(
+        RoleArn='myrole', RoleSessionName='myname')
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_external_id_provided(fake_config):
+    fake_config['profiles']['development']['external_id'] = 'myid'
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        client_creator, cache={}, profile_name='development')
+
+    # The credentials won't actually be assumed until they're requested.
+    await (await provider.load()).get_frozen_credentials()
+
+    client = client_creator.return_value
+    client.assume_role.assert_called_with(
+        RoleArn='myrole', ExternalId='myid', RoleSessionName=mock.ANY)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_with_mfa(fake_config):
+    fake_config['profiles']['development']['mfa_serial'] = 'mfa'
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat(),
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+    prompter = mock.Mock(return_value='token-code')
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config), client_creator,
+        cache={}, profile_name='development', prompter=prompter)
+
+    # The credentials won't actually be assumed until they're requested.
+    await (await provider.load()).get_frozen_credentials()
+
+    client = client_creator.return_value
+    # In addition to the normal assume role args, we should also
+    # inject the serial number from the config as well as the
+    # token code that comes from prompting the user (the prompter
+    # object).
+    client.assume_role.assert_called_with(
+        RoleArn='myrole', RoleSessionName=mock.ANY, SerialNumber='mfa',
+        TokenCode='token-code')
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_populates_session_name_on_refresh(fake_config):
+    expiration_time = some_future_time()
+    next_expiration_time = expiration_time + timedelta(hours=4)
+    responses = [{
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            # We're creating an expiry time in the past so as
+            # soon as we try to access the credentials, the
+            # refresh behavior will be triggered.
+            'Expiration': expiration_time.isoformat(),
+        },
+    }, {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': next_expiration_time.isoformat(),
+        }
+    }]
+    client_creator = create_client_creator(with_response=responses)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config), client_creator,
+        cache={}, profile_name='development',
+        prompter=mock.Mock(return_value='token-code'))
+
+    local_now = mock.Mock(return_value=datetime.now(tzlocal()))
+    with asynctest.mock.patch('aiobotocore.credentials._local_now', local_now):
+        # This will trigger the first assume_role() call.  It returns
+        # credentials that are expired and will trigger a refresh.
+        creds = await provider.load()
+        await creds.get_frozen_credentials()
+
+        # This will trigger the second assume_role() call because
+        # a refresh is needed.
+        local_now.return_value = expiration_time
+        await creds.get_frozen_credentials()
+
+    client = client_creator.return_value
+    assume_role_calls = client.assume_role.call_args_list
+    assert len(assume_role_calls) == 2
+    # The args should be identical.  That is, the second
+    # assume_role call should have the exact same args as the
+    # initial assume_role call.
+    assert assume_role_calls[0] == assume_role_calls[1]
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_mfa_cannot_refresh_credentials(fake_config):
+    # Note: we should look into supporting optional behavior
+    # in the future that allows for reprompting for credentials.
+    # But for now, if we get temp creds with MFA then when those
+    # creds expire, we can't refresh the credentials.
+    fake_config['profiles']['development']['mfa_serial'] = 'mfa'
+    expiration_time = some_future_time()
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            # We're creating an expiry time in the past so as
+            # soon as we try to access the credentials, the
+            # refresh behavior will be triggered.
+            'Expiration': expiration_time.isoformat(),
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config), client_creator,
+        cache={}, profile_name='development',
+        prompter=mock.Mock(return_value='token-code'))
+
+    local_now = mock.Mock(return_value=datetime.now(tzlocal()))
+    with mock.patch('aiobotocore.credentials._local_now', local_now):
+        # Loads the credentials, resulting in the first assume role call.
+        creds = await provider.load()
+        await creds.get_frozen_credentials()
+
+        local_now.return_value = expiration_time
+        with pytest.raises(credentials.RefreshWithMFAUnsupportedError):
+            await creds._refresh()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_no_config_is_noop(fake_config):
+    fake_config['profiles']['development'] = {
+        'aws_access_key_id': 'foo',
+        'aws_secret_access_key': 'bar',
+    }
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='development')
+
+    # Because a role_arn was not specified, the AssumeRoleProvider
+    # is a noop and will not return credentials (which means we
+    # move on to the next provider).
+    creds = await provider.load()
+    assert creds is None
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_source_profile_not_provided(fake_config):
+    del fake_config['profiles']['development']['source_profile']
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='development')
+
+    # source_profile is required, we shoudl get an error.
+    with pytest.raises(botocore.exceptions.PartialCredentialsError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_source_profile_does_not_exist(fake_config):
+    dev_profile = fake_config['profiles']['development']
+    dev_profile['source_profile'] = 'does-not-exist'
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='development')
+
+    # source_profile is required, we shoudl get an error.
+    with pytest.raises(botocore.exceptions.InvalidConfigError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_incomplete_source_credentials_raises_error(fake_config):
+    del fake_config['profiles']['longterm']['aws_access_key_id']
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='development')
+
+    with pytest.raises(botocore.exceptions.PartialCredentialsError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_source_profile_and_credential_source_provided(fake_config):
+    profile = fake_config['profiles']['development']
+    profile['credential_source'] = 'SomeCredentialProvider'
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='development')
+
+    with pytest.raises(botocore.exceptions.InvalidConfigError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credential_source_with_no_resolver_configured(fake_config):
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='non-static')
+
+    with pytest.raises(botocore.exceptions.InvalidConfigError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credential_source_with_no_providers_configured(fake_config):
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='non-static',
+        credential_sourcer=credentials.CanonicalNameCredentialSourcer([])
+    )
+
+    with pytest.raises(botocore.exceptions.InvalidConfigError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credential_source_not_among_providers(fake_config):
+    fake_provider = mock.Mock()
+    fake_provider.CANONICAL_NAME = 'CustomFakeProvider'
+
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(fake_config),
+        mock.Mock(), cache={}, profile_name='non-static',
+        credential_sourcer=credentials.CanonicalNameCredentialSourcer(
+            [fake_provider])
+    )
+
+    # We configured the assume role provider with a single fake source
+    # provider, CustomFakeProvider. The profile we are attempting to use
+    # calls for the Environment credential provider as the credentials
+    # source. Since that isn't one of the configured source providers,
+    # an error is thrown.
+    with pytest.raises(botocore.exceptions.InvalidConfigError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_assume_role_with_credential_source(fake_config):
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+
+    config = {
+        'profiles': {
+            'sourced': {
+                'role_arn': 'myrole',
+                'credential_source': 'CustomMockProvider'
+            }
+        }
+    }
+    config_loader = create_config_loader(fake_config, with_config=config)
+
+    fake_provider = mock.Mock()
+    fake_provider.CANONICAL_NAME = 'CustomMockProvider'
+    fake_creds = credentials.Credentials(
+        'akid', 'skid', 'token'
+    )
+    fake_provider.load = asynctest.CoroutineMock(return_value=fake_creds)
+
+    provider = credentials.AssumeRoleProvider(
+        config_loader, client_creator, cache={}, profile_name='sourced',
+        credential_sourcer=credentials.CanonicalNameCredentialSourcer(
+            [fake_provider])
+    )
+
+    creds = await provider.load()
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+    client_creator.assert_called_with(
+        'sts', aws_access_key_id=fake_creds.access_key,
+        aws_secret_access_key=fake_creds.secret_key,
+        aws_session_token=fake_creds.token
+    )
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_credential_source_returns_none(fake_config):
+    config = {
+        'profiles': {
+            'sourced': {
+                'role_arn': 'myrole',
+                'credential_source': 'CustomMockProvider'
+            }
+        }
+    }
+    config_loader = create_config_loader(fake_config, with_config=config)
+
+    fake_provider = mock.Mock()
+    fake_provider.CANONICAL_NAME = 'CustomMockProvider'
+    fake_provider.load = asynctest.CoroutineMock(return_value=None)
+
+    provider = credentials.AssumeRoleProvider(
+        config_loader, mock.Mock(), cache={}, profile_name='sourced',
+        credential_sourcer=credentials.CanonicalNameCredentialSourcer(
+            [fake_provider])
+    )
+
+    with pytest.raises(botocore.exceptions.CredentialRetrievalError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_source_profile_can_reference_self():
+    response = {
+        'Credentials': {
+            'AccessKeyId': 'foo',
+            'SecretAccessKey': 'bar',
+            'SessionToken': 'baz',
+            'Expiration': some_future_time().isoformat()
+        },
+    }
+    client_creator = create_client_creator(with_response=response)
+
+    config = {
+        'profiles': {
+            'self-referencial': {
+                'aws_access_key_id': 'akid',
+                'aws_secret_access_key': 'skid',
+                'role_arn': 'myrole',
+                'source_profile': 'self-referencial'
+            }
+        }
+    }
+
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(config),
+        client_creator, cache={}, profile_name='self-referencial'
+    )
+
+    creds = await provider.load()
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_infinite_looping_profiles_raises_error():
+    config = {
+        'profiles': {
+            'first': {
+                'role_arn': 'first',
+                'source_profile': 'second'
+            },
+            'second': {
+                'role_arn': 'second',
+                'source_profile': 'first'
+            }
+        }
+    }
+
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(config),
+        mock.Mock(), cache={}, profile_name='first'
+    )
+
+    with pytest.raises(botocore.credentials.InfiniteLoopConfigError):
+        await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_recursive_assume_role():
+    assume_responses = [
+        Credentials('foo', 'bar', 'baz'),
+        Credentials('spam', 'eggs', 'spamandegss'),
+    ]
+    responses = []
+    for credential_set in assume_responses:
+        responses.append({
+            'Credentials': {
+                'AccessKeyId': credential_set.access_key,
+                'SecretAccessKey': credential_set.secret_key,
+                'SessionToken': credential_set.token,
+                'Expiration': some_future_time().isoformat()
+            }
+        })
+    client_creator = create_client_creator(with_response=responses)
+
+    static_credentials = Credentials('akid', 'skid')
+    config = {
+        'profiles': {
+            'first': {
+                'role_arn': 'first',
+                'source_profile': 'second'
+            },
+            'second': {
+                'role_arn': 'second',
+                'source_profile': 'third'
+            },
+            'third': {
+                'aws_access_key_id': static_credentials.access_key,
+                'aws_secret_access_key': static_credentials.secret_key,
+            }
+        }
+    }
+
+    provider = credentials.AssumeRoleProvider(
+        create_config_loader(config),
+        client_creator, cache={}, profile_name='first'
+    )
+
+    creds = await provider.load()
+    expected_creds = assume_responses[-1]
+    assert creds.access_key == expected_creds.access_key
+    assert creds.secret_key == expected_creds.secret_key
+    assert creds.token == expected_creds.token
+
+    client_creator.assert_has_calls([
+        mock.call(
+            'sts', aws_access_key_id=static_credentials.access_key,
+            aws_secret_access_key=static_credentials.secret_key,
+            aws_session_token=static_credentials.token
+        ),
+        mock.call(
+            'sts', aws_access_key_id=assume_responses[0].access_key,
+            aws_secret_access_key=assume_responses[0].secret_key,
+            aws_session_token=assume_responses[0].token
+        ),
+    ])
 
-# class TestAssumeRoleCredentialProvider(unittest.TestCase):
-
-#     maxDiff = None
-
-#     def setUp(self):
-#         self.fake_config = {
-#             'profiles': {
-#                 'development': {
-#                     'role_arn': 'myrole',
-#                     'source_profile': 'longterm',
-#                 },
-#                 'longterm': {
-#                     'aws_access_key_id': 'akid',
-#                     'aws_secret_access_key': 'skid',
-#                 },
-#                 'non-static': {
-#                     'role_arn': 'myrole',
-#                     'credential_source': 'Environment'
-#                 },
-#                 'chained': {
-#                     'role_arn': 'chained-role',
-#                     'source_profile': 'development'
-#                 }
-#             }
-#         }
-
-#     def create_config_loader(self, with_config=None):
-#         if with_config is None:
-#             with_config = self.fake_config
-#         load_config = mock.Mock()
-#         load_config.return_value = with_config
-#         return load_config
-
-#     def create_client_creator(self, with_response):
-#         # Create a mock sts client that returns a specific response
-#         # for assume_role.
-#         client = mock.Mock()
-#         if isinstance(with_response, list):
-#             client.assume_role.side_effect = with_response
-#         else:
-#             client.assume_role.return_value = with_response
-#         return mock.Mock(return_value=client)
-
-#     def some_future_time(self):
-#         timeobj = datetime.now(tzlocal())
-#         return timeobj + timedelta(hours=24)
-
-#     def test_assume_role_with_no_cache(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             client_creator, cache={}, profile_name='development')
-
-#         creds = provider.load()
-
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-
-#     def test_assume_role_with_datetime(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 # Note the lack of isoformat(), we're using
-#                 # a datetime.datetime type.  This will ensure
-#                 # we test both parsing as well as serializing
-#                 # from a given datetime because the credentials
-#                 # are immediately expired.
-#                 'Expiration': datetime.now(tzlocal()) + timedelta(hours=20)
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             client_creator, cache={}, profile_name='development')
-
-#         creds = provider.load()
-
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-
-#     def test_assume_role_refresher_serializes_datetime(self):
-#         client = mock.Mock()
-#         time_zone = tzutc()
-#         expiration = datetime(
-#             year=2016, month=11, day=6, hour=1, minute=30, tzinfo=time_zone)
-#         client.assume_role.return_value = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': expiration,
-#             }
-#         }
-#         refresh = create_assume_role_refresher(client, {})
-#         expiry_time = refresh()['expiry_time']
-#         self.assertEqual(expiry_time, '2016-11-06T01:30:00UTC')
-
-#     def test_assume_role_retrieves_from_cache(self):
-#         date_in_future = datetime.utcnow() + timedelta(seconds=1000)
-#         utc_timestamp = date_in_future.isoformat() + 'Z'
-#         self.fake_config['profiles']['development']['role_arn'] = 'myrole'
-
-#         cache_key = (
-#             '793d6e2f27667ab2da104824407e486bfec24a47'
-#         )
-#         cache = {
-#             cache_key: {
-#                 'Credentials': {
-#                     'AccessKeyId': 'foo-cached',
-#                     'SecretAccessKey': 'bar-cached',
-#                     'SessionToken': 'baz-cached',
-#                     'Expiration': utc_timestamp,
-#                 }
-#             }
-#         }
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(), mock.Mock(),
-#             cache=cache, profile_name='development')
-
-#         creds = provider.load()
-
-#         self.assertEqual(creds.access_key, 'foo-cached')
-#         self.assertEqual(creds.secret_key, 'bar-cached')
-#         self.assertEqual(creds.token, 'baz-cached')
-
-#     def test_chain_prefers_cache(self):
-#         date_in_future = datetime.utcnow() + timedelta(seconds=1000)
-#         utc_timestamp = date_in_future.isoformat() + 'Z'
-
-#         # The profile we will be using has a cache entry, but the profile it
-#         # is sourcing from does not. This should result in the cached
-#         # credentials being used, and the source profile not being called.
-#         cache_key = (
-#             '3d440bf424caf7a5ee664fbf89139a84409f95c2'
-#         )
-#         cache = {
-#             cache_key: {
-#                 'Credentials': {
-#                     'AccessKeyId': 'foo-cached',
-#                     'SecretAccessKey': 'bar-cached',
-#                     'SessionToken': 'baz-cached',
-#                     'Expiration': utc_timestamp,
-#                 }
-#             }
-#         }
-
-#         client_creator = self.create_client_creator([
-#             Exception("Attempted to call assume role when not needed.")
-#         ])
-
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(), client_creator,
-#             cache=cache, profile_name='chained')
-
-#         creds = provider.load()
-
-#         self.assertEqual(creds.access_key, 'foo-cached')
-#         self.assertEqual(creds.secret_key, 'bar-cached')
-#         self.assertEqual(creds.token, 'baz-cached')
-
-#     def test_cache_key_is_windows_safe(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         cache = {}
-#         self.fake_config['profiles']['development']['role_arn'] = (
-#             'arn:aws:iam::foo-role')
-
-#         client_creator = self.create_client_creator(with_response=response)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             client_creator, cache=cache, profile_name='development')
-
-#         provider.load().get_frozen_credentials()
-#         # On windows, you cannot use a a ':' in the filename, so
-#         # we need to make sure it doesn't come up in the cache key.
-#         cache_key = (
-#             '3f8e35c8dca6211d496e830a2de723b2387921e3'
-#         )
-#         self.assertIn(cache_key, cache)
-#         self.assertEqual(cache[cache_key], response)
-
-#     def test_cache_key_with_role_session_name(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         cache = {}
-#         self.fake_config['profiles']['development']['role_arn'] = (
-#             'arn:aws:iam::foo-role')
-#         self.fake_config['profiles']['development']['role_session_name'] = (
-#             'foo_role_session_name')
-
-#         client_creator = self.create_client_creator(with_response=response)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             client_creator, cache=cache, profile_name='development')
-
-#         # The credentials won't actually be assumed until they're requested.
-#         provider.load().get_frozen_credentials()
-
-#         cache_key = (
-#             '5e75ce21b6a64ab183b29c4a159b6f0248121d51'
-#         )
-#         self.assertIn(cache_key, cache)
-#         self.assertEqual(cache[cache_key], response)
-
-#     def test_assume_role_in_cache_but_expired(self):
-#         expired_creds = datetime.now(tzlocal())
-#         valid_creds = expired_creds + timedelta(hours=1)
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': valid_creds,
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         cache = {
-#             'development--myrole': {
-#                 'Credentials': {
-#                     'AccessKeyId': 'foo-cached',
-#                     'SecretAccessKey': 'bar-cached',
-#                     'SessionToken': 'baz-cached',
-#                     'Expiration': expired_creds,
-#                 }
-#             }
-#         }
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(), client_creator,
-#             cache=cache, profile_name='development')
-
-#         creds = provider.load()
-
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-
-#     def test_role_session_name_provided(self):
-#         dev_profile = self.fake_config['profiles']['development']
-#         dev_profile['role_session_name'] = 'myname'
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             client_creator, cache={}, profile_name='development')
-
-#         # The credentials won't actually be assumed until they're requested.
-#         provider.load().get_frozen_credentials()
-
-#         client = client_creator.return_value
-#         client.assume_role.assert_called_with(
-#             RoleArn='myrole', RoleSessionName='myname')
-
-#     def test_external_id_provided(self):
-#         self.fake_config['profiles']['development']['external_id'] = 'myid'
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             client_creator, cache={}, profile_name='development')
-
-#         # The credentials won't actually be assumed until they're requested.
-#         provider.load().get_frozen_credentials()
-
-#         client = client_creator.return_value
-#         client.assume_role.assert_called_with(
-#             RoleArn='myrole', ExternalId='myid', RoleSessionName=mock.ANY)
-
-#     def test_assume_role_with_mfa(self):
-#         self.fake_config['profiles']['development']['mfa_serial'] = 'mfa'
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         prompter = mock.Mock(return_value='token-code')
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(), client_creator,
-#             cache={}, profile_name='development', prompter=prompter)
-
-#         # The credentials won't actually be assumed until they're requested.
-#         provider.load().get_frozen_credentials()
-
-#         client = client_creator.return_value
-#         # In addition to the normal assume role args, we should also
-#         # inject the serial number from the config as well as the
-#         # token code that comes from prompting the user (the prompter
-#         # object).
-#         client.assume_role.assert_called_with(
-#             RoleArn='myrole', RoleSessionName=mock.ANY, SerialNumber='mfa',
-#             TokenCode='token-code')
-
-#     def test_assume_role_populates_session_name_on_refresh(self):
-#         expiration_time = self.some_future_time()
-#         next_expiration_time = expiration_time + timedelta(hours=4)
-#         responses = [{
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 # We're creating an expiry time in the past so as
-#                 # soon as we try to access the credentials, the
-#                 # refresh behavior will be triggered.
-#                 'Expiration': expiration_time.isoformat(),
-#             },
-#         }, {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': next_expiration_time.isoformat(),
-#             }
-#         }]
-#         client_creator = self.create_client_creator(with_response=responses)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(), client_creator,
-#             cache={}, profile_name='development',
-#             prompter=mock.Mock(return_value='token-code'))
-
-#         local_now = mock.Mock(return_value=datetime.now(tzlocal()))
-#         with mock.patch('botocore.credentials._local_now', local_now):
-#             # This will trigger the first assume_role() call.  It returns
-#             # credentials that are expired and will trigger a refresh.
-#             creds = provider.load()
-#             creds.get_frozen_credentials()
-
-#             # This will trigger the second assume_role() call because
-#             # a refresh is needed.
-#             local_now.return_value = expiration_time
-#             creds.get_frozen_credentials()
-
-#         client = client_creator.return_value
-#         assume_role_calls = client.assume_role.call_args_list
-#         self.assertEqual(len(assume_role_calls), 2, assume_role_calls)
-#         # The args should be identical.  That is, the second
-#         # assume_role call should have the exact same args as the
-#         # initial assume_role call.
-#         self.assertEqual(assume_role_calls[0], assume_role_calls[1])
-
-#     def test_assume_role_mfa_cannot_refresh_credentials(self):
-#         # Note: we should look into supporting optional behavior
-#         # in the future that allows for reprompting for credentials.
-#         # But for now, if we get temp creds with MFA then when those
-#         # creds expire, we can't refresh the credentials.
-#         self.fake_config['profiles']['development']['mfa_serial'] = 'mfa'
-#         expiration_time = self.some_future_time()
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 # We're creating an expiry time in the past so as
-#                 # soon as we try to access the credentials, the
-#                 # refresh behavior will be triggered.
-#                 'Expiration': expiration_time.isoformat(),
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(), client_creator,
-#             cache={}, profile_name='development',
-#             prompter=mock.Mock(return_value='token-code'))
-
-#         local_now = mock.Mock(return_value=datetime.now(tzlocal()))
-#         with mock.patch('botocore.credentials._local_now', local_now):
-#             # Loads the credentials, resulting in the first assume role call.
-#             creds = provider.load()
-#             creds.get_frozen_credentials()
-
-#             local_now.return_value = expiration_time
-#             with self.assertRaises(credentials.RefreshWithMFAUnsupportedError):
-#                 # access_key is a property that will refresh credentials
-#                 # if they're expired.  Because we set the expiry time to
-#                 # something in the past, this will trigger the refresh
-#                 # behavior, with with MFA will currently raise an exception.
-#                 creds.access_key
-
-#     def test_no_config_is_noop(self):
-#         self.fake_config['profiles']['development'] = {
-#             'aws_access_key_id': 'foo',
-#             'aws_secret_access_key': 'bar',
-#         }
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='development')
-
-#         # Because a role_arn was not specified, the AssumeRoleProvider
-#         # is a noop and will not return credentials (which means we
-#         # move on to the next provider).
-#         creds = provider.load()
-#         self.assertIsNone(creds)
-
-#     def test_source_profile_not_provided(self):
-#         del self.fake_config['profiles']['development']['source_profile']
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='development')
-
-#         # source_profile is required, we shoudl get an error.
-#         with self.assertRaises(botocore.exceptions.PartialCredentialsError):
-#             provider.load()
-
-#     def test_source_profile_does_not_exist(self):
-#         dev_profile = self.fake_config['profiles']['development']
-#         dev_profile['source_profile'] = 'does-not-exist'
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='development')
-
-#         # source_profile is required, we shoudl get an error.
-#         with self.assertRaises(botocore.exceptions.InvalidConfigError):
-#             provider.load()
-
-#     def test_incomplete_source_credentials_raises_error(self):
-#         del self.fake_config['profiles']['longterm']['aws_access_key_id']
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='development')
-
-#         with self.assertRaises(botocore.exceptions.PartialCredentialsError):
-#             provider.load()
-
-#     def test_source_profile_and_credential_source_provided(self):
-#         profile = self.fake_config['profiles']['development']
-#         profile['credential_source'] = 'SomeCredentialProvider'
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='development')
-
-#         with self.assertRaises(botocore.exceptions.InvalidConfigError):
-#             provider.load()
-
-#     def test_credential_source_with_no_resolver_configured(self):
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='non-static')
-
-#         with self.assertRaises(botocore.exceptions.InvalidConfigError):
-#             provider.load()
-
-#     def test_credential_source_with_no_providers_configured(self):
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='non-static',
-#             credential_sourcer=credentials.CanonicalNameCredentialSourcer([])
-#         )
-
-#         with self.assertRaises(botocore.exceptions.InvalidConfigError):
-#             provider.load()
-
-#     def test_credential_source_not_among_providers(self):
-#         fake_provider = mock.Mock()
-#         fake_provider.CANONICAL_NAME = 'CustomFakeProvider'
-
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(),
-#             mock.Mock(), cache={}, profile_name='non-static',
-#             credential_sourcer=credentials.CanonicalNameCredentialSourcer(
-#                 [fake_provider])
-#         )
-
-#         # We configured the assume role provider with a single fake source
-#         # provider, CustomFakeProvider. The profile we are attempting to use
-#         # calls for the Environment credential provider as the credentials
-#         # source. Since that isn't one of the configured source providers,
-#         # an error is thrown.
-#         with self.assertRaises(botocore.exceptions.InvalidConfigError):
-#             provider.load()
-
-#     def test_assume_role_with_credential_source(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-
-#         config = {
-#             'profiles': {
-#                 'sourced': {
-#                     'role_arn': 'myrole',
-#                     'credential_source': 'CustomMockProvider'
-#                 }
-#             }
-#         }
-#         config_loader = self.create_config_loader(with_config=config)
-
-#         fake_provider = mock.Mock()
-#         fake_provider.CANONICAL_NAME = 'CustomMockProvider'
-#         fake_creds = credentials.Credentials(
-#             'akid', 'skid', 'token'
-#         )
-#         fake_provider.load.return_value = fake_creds
-
-#         provider = credentials.AssumeRoleProvider(
-#             config_loader, client_creator, cache={}, profile_name='sourced',
-#             credential_sourcer=credentials.CanonicalNameCredentialSourcer(
-#                 [fake_provider])
-#         )
-
-#         creds = provider.load()
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-#         client_creator.assert_called_with(
-#             'sts', aws_access_key_id=fake_creds.access_key,
-#             aws_secret_access_key=fake_creds.secret_key,
-#             aws_session_token=fake_creds.token
-#         )
-
-#     def test_credential_source_returns_none(self):
-#         config = {
-#             'profiles': {
-#                 'sourced': {
-#                     'role_arn': 'myrole',
-#                     'credential_source': 'CustomMockProvider'
-#                 }
-#             }
-#         }
-#         config_loader = self.create_config_loader(with_config=config)
-
-#         fake_provider = mock.Mock()
-#         fake_provider.CANONICAL_NAME = 'CustomMockProvider'
-#         fake_provider.load.return_value = None
-
-#         provider = credentials.AssumeRoleProvider(
-#             config_loader, mock.Mock(), cache={}, profile_name='sourced',
-#             credential_sourcer=credentials.CanonicalNameCredentialSourcer(
-#                 [fake_provider])
-#         )
-
-#         with self.assertRaises(botocore.exceptions.CredentialRetrievalError):
-#             provider.load()
-
-#     def test_source_profile_can_reference_self(self):
-#         response = {
-#             'Credentials': {
-#                 'AccessKeyId': 'foo',
-#                 'SecretAccessKey': 'bar',
-#                 'SessionToken': 'baz',
-#                 'Expiration': self.some_future_time().isoformat()
-#             },
-#         }
-#         client_creator = self.create_client_creator(with_response=response)
-
-#         config = {
-#             'profiles': {
-#                 'self-referencial': {
-#                     'aws_access_key_id': 'akid',
-#                     'aws_secret_access_key': 'skid',
-#                     'role_arn': 'myrole',
-#                     'source_profile': 'self-referencial'
-#                 }
-#             }
-#         }
-
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(config),
-#             client_creator, cache={}, profile_name='self-referencial'
-#         )
-
-#         creds = provider.load()
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-
-#     def test_infinite_looping_profiles_raises_error(self):
-#         config = {
-#             'profiles': {
-#                 'first': {
-#                     'role_arn': 'first',
-#                     'source_profile': 'second'
-#                 },
-#                 'second': {
-#                     'role_arn': 'second',
-#                     'source_profile': 'first'
-#                 }
-#             }
-#         }
-
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(config),
-#             mock.Mock(), cache={}, profile_name='first'
-#         )
-
-#         with self.assertRaises(botocore.credentials.InfiniteLoopConfigError):
-#             provider.load()
-
-#     def test_recursive_assume_role(self):
-#         assume_responses = [
-#             Credentials('foo', 'bar', 'baz'),
-#             Credentials('spam', 'eggs', 'spamandegss'),
-#         ]
-#         responses = []
-#         for credential_set in assume_responses:
-#             responses.append({
-#                 'Credentials': {
-#                     'AccessKeyId': credential_set.access_key,
-#                     'SecretAccessKey': credential_set.secret_key,
-#                     'SessionToken': credential_set.token,
-#                     'Expiration': self.some_future_time().isoformat()
-#                 }
-#             })
-#         client_creator = self.create_client_creator(with_response=responses)
-
-#         static_credentials = Credentials('akid', 'skid')
-#         config = {
-#             'profiles': {
-#                 'first': {
-#                     'role_arn': 'first',
-#                     'source_profile': 'second'
-#                 },
-#                 'second': {
-#                     'role_arn': 'second',
-#                     'source_profile': 'third'
-#                 },
-#                 'third': {
-#                     'aws_access_key_id': static_credentials.access_key,
-#                     'aws_secret_access_key': static_credentials.secret_key,
-#                 }
-#             }
-#         }
-
-#         provider = credentials.AssumeRoleProvider(
-#             self.create_config_loader(config),
-#             client_creator, cache={}, profile_name='first'
-#         )
-
-#         creds = provider.load()
-#         expected_creds = assume_responses[-1]
-#         self.assertEqual(creds.access_key, expected_creds.access_key)
-#         self.assertEqual(creds.secret_key, expected_creds.secret_key)
-#         self.assertEqual(creds.token, expected_creds.token)
-
-#         client_creator.assert_has_calls([
-#             mock.call(
-#                 'sts', aws_access_key_id=static_credentials.access_key,
-#                 aws_secret_access_key=static_credentials.secret_key,
-#                 aws_session_token=static_credentials.token
-#             ),
-#             mock.call(
-#                 'sts', aws_access_key_id=assume_responses[0].access_key,
-#                 aws_secret_access_key=assume_responses[0].secret_key,
-#                 aws_session_token=assume_responses[0].token
-#             ),
-#         ])
+
+
 
 
 # class TestJSONCache(unittest.TestCase):
