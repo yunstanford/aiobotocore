@@ -1866,7 +1866,7 @@ async def test_assume_role_refresher_serializes_datetime(fake_config):
         }
     })
     refresh = create_assume_role_refresher(client, {})
-    expiry_time = refresh()['expiry_time']
+    expiry_time = (await refresh())['expiry_time']
     assert expiry_time == '2016-11-06T01:30:00UTC'
 
 
@@ -2524,68 +2524,83 @@ async def test_recursive_assume_role():
     ])
 
 
+#######################
+# class TestJSONCache #
+#######################
+@pytest.fixture
+def json_cache(tmpdir):
+    return credentials.JSONFileCache(tmpdir)
 
 
+@pytest.mark.moto
+def test_supports_contains_check(json_cache):
+    # By default the cache is empty because we're
+    # using a new temp dir everytime.
+    assert 'mykey' not in json_cache
 
-# class TestJSONCache(unittest.TestCase):
-#     def setUp(self):
-#         self.tempdir = tempfile.mkdtemp()
-#         self.cache = credentials.JSONFileCache(self.tempdir)
 
-#     def tearDown(self):
-#         shutil.rmtree(self.tempdir)
+@pytest.mark.moto
+def test_add_key_and_contains_check(json_cache):
+    json_cache['mykey'] = {'foo': 'bar'}
+    assert 'mykey' in json_cache
 
-#     def test_supports_contains_check(self):
-#         # By default the cache is empty because we're
-#         # using a new temp dir everytime.
-#         self.assertTrue('mykey' not in self.cache)
 
-#     def test_add_key_and_contains_check(self):
-#         self.cache['mykey'] = {'foo': 'bar'}
-#         self.assertTrue('mykey' in self.cache)
+@pytest.mark.moto
+def test_added_key_can_be_retrieved(json_cache):
+    json_cache['mykey'] = {'foo': 'bar'}
+    assert json_cache['mykey'] == {'foo': 'bar'}
 
-#     def test_added_key_can_be_retrieved(self):
-#         self.cache['mykey'] = {'foo': 'bar'}
-#         self.assertEqual(self.cache['mykey'], {'foo': 'bar'})
 
-#     def test_only_accepts_json_serializable_data(self):
-#         with self.assertRaises(ValueError):
-#             # set()'s cannot be serialized to a JSON string.
-#             self.cache['mykey'] = set()
+@pytest.mark.moto
+def test_only_accepts_json_serializable_data(json_cache):
+    with pytest.raises(ValueError):
+        # set()'s cannot be serialized to a JSON string.
+        json_cache['mykey'] = set()
 
-#     def test_can_override_existing_values(self):
-#         self.cache['mykey'] = {'foo': 'bar'}
-#         self.cache['mykey'] = {'baz': 'newvalue'}
-#         self.assertEqual(self.cache['mykey'], {'baz': 'newvalue'})
 
-#     def test_can_add_multiple_keys(self):
-#         self.cache['mykey'] = {'foo': 'bar'}
-#         self.cache['mykey2'] = {'baz': 'qux'}
-#         self.assertEqual(self.cache['mykey'], {'foo': 'bar'})
-#         self.assertEqual(self.cache['mykey2'], {'baz': 'qux'})
+@pytest.mark.moto
+def test_can_override_existing_values(json_cache):
+    json_cache['mykey'] = {'foo': 'bar'}
+    json_cache['mykey'] = {'baz': 'newvalue'}
+    assert json_cache['mykey'] == {'baz': 'newvalue'}
 
-#     def test_working_dir_does_not_exist(self):
-#         working_dir = os.path.join(self.tempdir, 'foo')
-#         cache = credentials.JSONFileCache(working_dir)
-#         cache['foo'] = {'bar': 'baz'}
-#         self.assertEqual(cache['foo'], {'bar': 'baz'})
 
-#     def test_key_error_raised_when_cache_key_does_not_exist(self):
-#         with self.assertRaises(KeyError):
-#             self.cache['foo']
+@pytest.mark.moto
+def test_can_add_multiple_keys(json_cache):
+    json_cache['mykey'] = {'foo': 'bar'}
+    json_cache['mykey2'] = {'baz': 'qux'}
+    assert json_cache['mykey'] == {'foo': 'bar'}
+    assert json_cache['mykey2'] == {'baz': 'qux'}
 
-#     def test_file_is_truncated_before_writing(self):
-#         self.cache['mykey'] = {
-#             'really long key in the cache': 'really long value in cache'}
-#         # Now overwrite it with a smaller value.
-#         self.cache['mykey'] = {'a': 'b'}
-#         self.assertEqual(self.cache['mykey'], {'a': 'b'})
 
-#     @skip_if_windows('File permissions tests not supported on Windows.')
-#     def test_permissions_for_file_restricted(self):
-#         self.cache['mykey'] = {'foo': 'bar'}
-#         filename = os.path.join(self.tempdir, 'mykey.json')
-#         self.assertEqual(os.stat(filename).st_mode & 0xFFF, 0o600)
+@pytest.mark.moto
+def test_working_dir_does_not_exist(tmpdir, json_cache):
+    working_dir = os.path.join(tmpdir, 'foo')
+    json_cache = credentials.JSONFileCache(working_dir)
+    json_cache['foo'] = {'bar': 'baz'}
+    assert json_cache['foo'] == {'bar': 'baz'}
+
+
+@pytest.mark.moto
+def test_key_error_raised_when_cache_key_does_not_exist(json_cache):
+    with pytest.raises(KeyError):
+        json_cache['foo']
+
+
+@pytest.mark.moto
+def t(json_cache):
+    json_cache['mykey'] = {
+        'really long key in the cache': 'really long value in cache'}
+    # Now overwrite it with a smaller value.
+    json_cache['mykey'] = {'a': 'b'}
+    assert self.cache['mykey'] == {'a': 'b'}
+
+
+@pytest.mark.moto
+def test_permissions_for_file_restricted(tmpdir, json_cache):
+    json_cache['mykey'] = {'foo': 'bar'}
+    filename = os.path.join(tmpdir, 'mykey.json')
+    assert os.stat(filename).st_mode & 0xFFF == 0o600
 
 
 # class TestRefreshLogic(unittest.TestCase):
