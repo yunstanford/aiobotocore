@@ -33,6 +33,7 @@ from aiobotocore.credentials import Credentials
 import botocore
 import botocore.exceptions
 from botocore.compat import json
+from botocore import utils
 
 
 # Passed to session to keep it from finding default config file
@@ -2603,94 +2604,182 @@ def test_permissions_for_file_restricted(tmpdir, json_cache):
     assert os.stat(filename).st_mode & 0xFFF == 0o600
 
 
-# class TestRefreshLogic(unittest.TestCase):
-#     def test_mandatory_refresh_needed(self):
-#         creds = IntegerRefresher(
-#             # These values will immediately trigger
-#             # a manadatory refresh.
-#             creds_last_for=2,
-#             mandatory_refresh=3,
-#             advisory_refresh=3)
-#         temp = creds.get_frozen_credentials()
-#         self.assertEqual(
-#             temp, credentials.ReadOnlyCredentials('1', '1', '1'))
+##########################
+# class TestRefreshLogic #
+##########################
+class IntegerRefresher(credentials.RefreshableCredentials):
+    """Refreshable credentials to help with testing.
 
-#     def test_advisory_refresh_needed(self):
-#         creds = IntegerRefresher(
-#             # These values will immediately trigger
-#             # a manadatory refresh.
-#             creds_last_for=4,
-#             mandatory_refresh=2,
-#             advisory_refresh=5)
-#         temp = creds.get_frozen_credentials()
-#         self.assertEqual(
-#             temp, credentials.ReadOnlyCredentials('1', '1', '1'))
+    This class makes testing refreshable credentials easier.
+    It has the following functionality:
 
-#     def test_refresh_fails_is_not_an_error_during_advisory_period(self):
-#         fail_refresh = mock.Mock(side_effect=Exception("refresh failed"))
-#         creds = IntegerRefresher(
-#             creds_last_for=5,
-#             advisory_refresh=7,
-#             mandatory_refresh=3,
-#             refresh_function=fail_refresh
-#         )
-#         temp = creds.get_frozen_credentials()
-#         # We should have called the refresh function.
-#         self.assertTrue(fail_refresh.called)
-#         # The fail_refresh function will raise an exception.
-#         # Because we're in the advisory period we'll not propogate
-#         # the exception and return the current set of credentials
-#         # (generation '1').
-#         self.assertEqual(
-#             temp, credentials.ReadOnlyCredentials('0', '0', '0'))
+        * A counter, self.refresh_counter, to indicate how many
+          times refresh was called.
+        * A way to specify how many seconds to make credentials
+          valid.
+        * Configurable advisory/mandatory refresh.
+        * An easy way to check consistency.  Each time creds are
+          refreshed, all the cred values are set to the next
+          incrementing integer.  Frozen credentials should always
+          have this value.
+    """
 
-#     def test_exception_propogated_on_error_during_mandatory_period(self):
-#         fail_refresh = mock.Mock(side_effect=Exception("refresh failed"))
-#         creds = IntegerRefresher(
-#             creds_last_for=5,
-#             advisory_refresh=10,
-#             # Note we're in the mandatory period now (5 < 7< 10).
-#             mandatory_refresh=7,
-#             refresh_function=fail_refresh
-#         )
-#         with self.assertRaisesRegexp(Exception, 'refresh failed'):
-#             creds.get_frozen_credentials()
+    _advisory_refresh_timeout = 2
+    _mandatory_refresh_timeout = 1
+    _credentials_expire = 3
 
-#     def test_exception_propogated_on_expired_credentials(self):
-#         fail_refresh = mock.Mock(side_effect=Exception("refresh failed"))
-#         creds = IntegerRefresher(
-#             # Setting this to 0 mean the credentials are immediately
-#             # expired.
-#             creds_last_for=0,
-#             advisory_refresh=10,
-#             mandatory_refresh=7,
-#             refresh_function=fail_refresh
-#         )
-#         with self.assertRaisesRegexp(Exception, 'refresh failed'):
-#             # Because credentials are actually expired, any
-#             # failure to refresh should be propagated.
-#             creds.get_frozen_credentials()
+    def __init__(self, creds_last_for=_credentials_expire,
+                 advisory_refresh=_advisory_refresh_timeout,
+                 mandatory_refresh=_mandatory_refresh_timeout,
+                 refresh_function=None):
+        expires_in = (
+            self._current_datetime() +
+            timedelta(seconds=creds_last_for))
+        if refresh_function is None:
+            refresh_function = self._do_refresh
+        super(IntegerRefresher, self).__init__(
+            '0', '0', '0', expires_in,
+            refresh_function, 'INTREFRESH')
+        self.creds_last_for = creds_last_for
+        self.refresh_counter = 0
+        self._advisory_refresh_timeout = advisory_refresh
+        self._mandatory_refresh_timeout = mandatory_refresh
 
-#     def test_refresh_giving_expired_credentials_raises_exception(self):
-#         # This verifies an edge cases where refreshed credentials
-#         # still give expired credentials:
-#         # 1. We see credentials are expired.
-#         # 2. We try to refresh the credentials.
-#         # 3. The "refreshed" credentials are still expired.
-#         #
-#         # In this case, we hard fail and let the user know what
-#         # happened.
-#         creds = IntegerRefresher(
-#             # Negative number indicates that the credentials
-#             # have already been expired for 2 seconds, even
-#             # on refresh.
-#             creds_last_for=-2,
-#         )
-#         err_msg = 'refreshed credentials are still expired'
-#         with self.assertRaisesRegexp(RuntimeError, err_msg):
-#             # Because credentials are actually expired, any
-#             # failure to refresh should be propagated.
-#             creds.get_frozen_credentials()
+    async def _do_refresh(self):
+        self.refresh_counter += 1
+        current = int(self._access_key)
+        next_id = str(current + 1)
+
+        return {
+            'access_key': next_id,
+            'secret_key': next_id,
+            'token': next_id,
+            'expiry_time': self._seconds_later(self.creds_last_for),
+        }
+
+    def _seconds_later(self, num_seconds):
+        # We need to guarantee at *least* num_seconds.
+        # Because this doesn't handle subsecond precision
+        # we'll round up to the next second.
+        num_seconds += 1
+        t = self._current_datetime() + timedelta(seconds=num_seconds)
+        return self._to_timestamp(t)
+
+    def _to_timestamp(self, datetime_obj):
+        obj = utils.parse_to_aware_datetime(datetime_obj)
+        return obj.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def _current_timestamp(self):
+        return self._to_timestamp(self._current_datetime())
+
+    def _current_datetime(self):
+        return datetime.now(tzlocal())
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_mandatory_refresh_needed():
+    creds = IntegerRefresher(
+        # These values will immediately trigger
+        # a manadatory refresh.
+        creds_last_for=2,
+        mandatory_refresh=3,
+        advisory_refresh=3)
+    temp = await creds.get_frozen_credentials()
+    assert temp == credentials.ReadOnlyCredentials('1', '1', '1')
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_advisory_refresh_needed():
+    creds = IntegerRefresher(
+        # These values will immediately trigger
+        # a manadatory refresh.
+        creds_last_for=4,
+        mandatory_refresh=2,
+        advisory_refresh=5)
+    temp = await creds.get_frozen_credentials()
+    assert temp == credentials.ReadOnlyCredentials('1', '1', '1')
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_refresh_fails_is_not_an_error_during_advisory_period():
+    fail_refresh = mock.Mock(side_effect=Exception("refresh failed"))
+    creds = IntegerRefresher(
+        creds_last_for=5,
+        advisory_refresh=7,
+        mandatory_refresh=3,
+        refresh_function=fail_refresh
+    )
+    temp = await creds.get_frozen_credentials()
+    # We should have called the refresh function.
+    assert fail_refresh.called is True
+    # The fail_refresh function will raise an exception.
+    # Because we're in the advisory period we'll not propogate
+    # the exception and return the current set of credentials
+    # (generation '1').
+    assert temp == credentials.ReadOnlyCredentials('0', '0', '0')
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_exception_propogated_on_error_during_mandatory_period():
+    fail_refresh = mock.Mock(side_effect=Exception("refresh failed"))
+    creds = IntegerRefresher(
+        creds_last_for=5,
+        advisory_refresh=10,
+        # Note we're in the mandatory period now (5 < 7< 10).
+        mandatory_refresh=7,
+        refresh_function=fail_refresh
+    )
+    with pytest.raises(Exception) as excinfo:
+        await creds.get_frozen_credentials()
+    assert "refresh failed" in str(excinfo.value)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_exception_propogated_on_expired_credentials():
+    fail_refresh = mock.Mock(side_effect=Exception("refresh failed"))
+    creds = IntegerRefresher(
+        # Setting this to 0 mean the credentials are immediately
+        # expired.
+        creds_last_for=0,
+        advisory_refresh=10,
+        mandatory_refresh=7,
+        refresh_function=fail_refresh
+    )
+    with pytest.raises(Exception) as excinfo:
+        # Because credentials are actually expired, any
+        # failure to refresh should be propagated.
+        await creds.get_frozen_credentials()
+    assert "refresh failed" in str(excinfo.value)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_refresh_giving_expired_credentials_raises_exception():
+    # This verifies an edge cases where refreshed credentials
+    # still give expired credentials:
+    # 1. We see credentials are expired.
+    # 2. We try to refresh the credentials.
+    # 3. The "refreshed" credentials are still expired.
+    #
+    # In this case, we hard fail and let the user know what
+    # happened.
+    creds = IntegerRefresher(
+        # Negative number indicates that the credentials
+        # have already been expired for 2 seconds, even
+        # on refresh.
+        creds_last_for=-2,
+    )
+    err_msg = 'refreshed credentials are still expired'
+    with pytest.raises(RuntimeError) as excinfo:
+        # Because credentials are actually expired, any
+        # failure to refresh should be propagated.
+        await creds.get_frozen_credentials()
+    assert err_msg in str(excinfo.value)
 
 
 # class TestContainerProvider(BaseEnvVar):
