@@ -18,7 +18,7 @@ import os
 import getpass
 import threading
 import json
-import subprocess
+from asyncio import subprocess
 from collections import namedtuple
 from copy import deepcopy
 from hashlib import sha1
@@ -743,7 +743,7 @@ class ProcessProvider(CredentialProvider):
 
     METHOD = 'custom-process'
 
-    def __init__(self, profile_name, load_config, popen=subprocess.Popen):
+    def __init__(self, profile_name, load_config, popen=asyncio.create_subprocess_exec):
         self._profile_name = profile_name
         self._load_config = load_config
         self._loaded_config = None
@@ -754,11 +754,14 @@ class ProcessProvider(CredentialProvider):
         if credential_process is None:
             return
 
-        creds_dict = self._retrieve_credentials_using(credential_process)
+        creds_dict = await self._retrieve_credentials_using(credential_process)
         if creds_dict.get('expiry_time') is not None:
+            async def _refresh_using():
+                return await self._retrieve_credentials_using(credential_process)
+
             return RefreshableCredentials.create_from_metadata(
                 creds_dict,
-                lambda: self._retrieve_credentials_using(credential_process),
+                _refresh_using,
                 self.METHOD
             )
 
@@ -769,14 +772,14 @@ class ProcessProvider(CredentialProvider):
             method=self.METHOD
         )
 
-    def _retrieve_credentials_using(self, credential_process):
+    async def _retrieve_credentials_using(self, credential_process):
         # We're not using shell=True, so we need to pass the
         # command and all arguments as a list.
         process_list = compat_shell_split(credential_process)
-        p = self._popen(process_list,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE)
-        stdout, stderr = p.communicate()
+        p = await self._popen(process_list,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE)
+        stdout, stderr = await p.communicate()
         if p.returncode != 0:
             raise CredentialRetrievalError(
                 provider=self.METHOD, error_msg=stderr.decode('utf-8'))

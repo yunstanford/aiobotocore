@@ -12,7 +12,8 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 from datetime import datetime, timedelta
-import subprocess
+from asyncio import subprocess
+import asyncio
 import mock
 import os
 import tempfile
@@ -2965,259 +2966,316 @@ async def test_can_pass_basic_auth_token():
     assert creds.method == 'container-role'
 
 
+#############################
+# class TestProcessProvider #
+#############################
+@pytest.fixture
+def loaded_config():
+    return {}
 
 
+@pytest.fixture
+def invoked_process():
+    return mock.Mock()
 
-# class TestProcessProvider(BaseEnvVar):
-#     def setUp(self):
-#         super(TestProcessProvider, self).setUp()
-#         self.loaded_config = {}
-#         self.load_config = mock.Mock(return_value=self.loaded_config)
-#         self.invoked_process = mock.Mock()
-#         self.popen_mock = mock.Mock(return_value=self.invoked_process,
-#                                     spec=subprocess.Popen)
 
-#     def create_process_provider(self, profile_name='default'):
-#         provider = credentials.ProcessProvider(profile_name, self.load_config,
-#                                                popen=self.popen_mock)
-#         return provider
+@pytest.fixture
+def popen_mock(invoked_process):
+    return asynctest.CoroutineMock(return_value=invoked_process, spec=asyncio.create_subprocess_exec)
 
-#     def _get_output(self, stdout, stderr=''):
-#         return json.dumps(stdout).encode('utf-8'), stderr.encode('utf-8')
 
-#     def _set_process_return_value(self, stdout, stderr='', rc=0):
-#         output = self._get_output(stdout, stderr)
-#         self.invoked_process.communicate.return_value = output
-#         self.invoked_process.returncode = rc
+def create_process_provider(loaded_config, popen_mock, profile_name='default'):
+    return credentials.ProcessProvider(
+                profile_name,
+                mock.Mock(return_value=loaded_config),
+                popen=popen_mock)
 
-#     def test_process_not_invoked_if_profile_does_not_exist(self):
-#         # self.loaded_config is an empty dictionary with no profile
-#         # information.
-#         provider = self.create_process_provider()
-#         self.assertIsNone(provider.load())
 
-#     def test_process_not_invoked_if_not_configured_for_empty_config(self):
-#         # No credential_process configured so we skip this provider.
-#         self.loaded_config['profiles'] = {'default': {}}
-#         provider = self.create_process_provider()
-#         self.assertIsNone(provider.load())
+def _get_output(stdout, stderr=''):
+    return json.dumps(stdout).encode('utf-8'), stderr.encode('utf-8')
 
-#     def test_can_retrieve_via_process(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value({
-#             'Version': 1,
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             'SessionToken': 'baz',
-#             'Expiration': '2020-01-01T00:00:00Z',
-#         })
 
-#         provider = self.create_process_provider()
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-#         self.assertEqual(creds.method, 'custom-process')
-#         self.popen_mock.assert_called_with(
-#             ['my-process'],
-#             stdout=subprocess.PIPE, stderr=subprocess.PIPE
-#         )
+def _set_process_return_value(invoked_process, stdout, stderr='', rc=0):
+    output = _get_output(stdout, stderr)
+    invoked_process.communicate = asynctest.CoroutineMock(return_value=output)
+    invoked_process.returncode = rc
 
-#     def test_can_pass_arguments_through(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {
-#                 'credential_process': 'my-process --foo --bar "one two"'
-#             }
-#         }
-#         self._set_process_return_value({
-#             'Version': 1,
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             'SessionToken': 'baz',
-#             'Expiration': '2020-01-01T00:00:00Z',
-#         })
 
-#         provider = self.create_process_provider()
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.popen_mock.assert_called_with(
-#             ['my-process', '--foo', '--bar', 'one two'],
-#             stdout=subprocess.PIPE, stderr=subprocess.PIPE
-#         )
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_process_not_invoked_if_profile_does_not_exist(loaded_config, popen_mock):
+    # loaded_config is an empty dictionary with no profile
+    # information.
+    provider = create_process_provider(loaded_config, popen_mock)
+    cred = await provider.load()
+    assert cred is None
 
-#     def test_can_refresh_credentials(self):
-#         # We given a time that's already expired so .access_key
-#         # will trigger the refresh worfklow.  We just need to verify
-#         # that the refresh function gives the same result as the
-#         # initial retrieval.
-#         expired_date = '2016-01-01T00:00:00Z'
-#         future_date = str(datetime.now(tzlocal()) + timedelta(hours=24))
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         old_creds = self._get_output({
-#             'Version': 1,
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             'SessionToken': 'baz',
-#             'Expiration': expired_date,
-#         })
-#         new_creds = self._get_output({
-#             'Version': 1,
-#             'AccessKeyId': 'foo2',
-#             'SecretAccessKey': 'bar2',
-#             'SessionToken': 'baz2',
-#             'Expiration': future_date,
-#         })
-#         self.invoked_process.communicate.side_effect = [old_creds, new_creds]
-#         self.invoked_process.returncode = 0
 
-#         provider = self.create_process_provider()
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo2')
-#         self.assertEqual(creds.secret_key, 'bar2')
-#         self.assertEqual(creds.token, 'baz2')
-#         self.assertEqual(creds.method, 'custom-process')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_process_not_invoked_if_not_configured_for_empty_config(loaded_config, popen_mock):
+    # No credential_process configured so we skip this provider.
+    loaded_config['profiles'] = {'default': {}}
+    provider = create_process_provider(loaded_config, popen_mock)
+    cred = await provider.load()
+    assert cred is None
 
-#     def test_non_zero_rc_raises_exception(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value('', 'Error Message', 1)
 
-#         provider = self.create_process_provider()
-#         exception = botocore.exceptions.CredentialRetrievalError
-#         with self.assertRaisesRegexp(exception, 'Error Message'):
-#             provider.load()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_retrieve_via_process(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, {
+        'Version': 1,
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        'SessionToken': 'baz',
+        'Expiration': '2020-01-01T00:00:00Z',
+    })
 
-#     def test_unsupported_version_raises_mismatch(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         bad_version = 100
-#         self._set_process_return_value({
-#             'Version': bad_version,
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             'SessionToken': 'baz',
-#             'Expiration': '2020-01-01T00:00:00Z',
-#         })
+    provider = create_process_provider(loaded_config, popen_mock)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+    assert creds.method == 'custom-process'
+    popen_mock.assert_called_with(
+        ['my-process'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
 
-#         provider = self.create_process_provider()
-#         exception = botocore.exceptions.CredentialRetrievalError
-#         with self.assertRaisesRegexp(exception, 'Unsupported version'):
-#             provider.load()
 
-#     def test_missing_version_in_payload_returned_raises_exception(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value({
-#             # Let's say they forget a 'Version' key.
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             'SessionToken': 'baz',
-#             'Expiration': '2020-01-01T00:00:00Z',
-#         })
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_pass_arguments_through(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {
+            'credential_process': 'my-process --foo --bar "one two"'
+        }
+    }
+    _set_process_return_value(invoked_process, {
+        'Version': 1,
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        'SessionToken': 'baz',
+        'Expiration': '2020-01-01T00:00:00Z',
+    })
 
-#         provider = self.create_process_provider()
-#         exception = botocore.exceptions.CredentialRetrievalError
-#         with self.assertRaisesRegexp(exception, 'Unsupported version'):
-#             provider.load()
+    provider = create_process_provider(loaded_config, popen_mock)
+    creds = await provider.load()
+    assert creds is not None
+    popen_mock.assert_called_with(
+        ['my-process', '--foo', '--bar', 'one two'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
 
-#     def test_missing_access_key_raises_exception(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value({
-#             'Version': 1,
-#             # Missing access key.
-#             'SecretAccessKey': 'bar',
-#             'SessionToken': 'baz',
-#             'Expiration': '2020-01-01T00:00:00Z',
-#         })
 
-#         provider = self.create_process_provider()
-#         exception = botocore.exceptions.CredentialRetrievalError
-#         with self.assertRaisesRegexp(exception, 'Missing required key'):
-#             provider.load()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_refresh_credentials(loaded_config, popen_mock, invoked_process):
+    # We given a time that's already expired so .access_key
+    # will trigger the refresh worfklow.  We just need to verify
+    # that the refresh function gives the same result as the
+    # initial retrieval.
+    expired_date = '2016-01-01T00:00:00Z'
+    future_date = str(datetime.now(tzlocal()) + timedelta(hours=24))
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    old_creds = _get_output({
+        'Version': 1,
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        'SessionToken': 'baz',
+        'Expiration': expired_date,
+    })
+    new_creds = _get_output({
+        'Version': 1,
+        'AccessKeyId': 'foo2',
+        'SecretAccessKey': 'bar2',
+        'SessionToken': 'baz2',
+        'Expiration': future_date,
+    })
+    invoked_process.communicate = asynctest.CoroutineMock(side_effect=[old_creds, new_creds])
+    invoked_process.returncode = 0
 
-#     def test_missing_secret_key_raises_exception(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value({
-#             'Version': 1,
-#             'AccessKeyId': 'foo',
-#             # Missing secret key.
-#             'SessionToken': 'baz',
-#             'Expiration': '2020-01-01T00:00:00Z',
-#         })
+    provider = create_process_provider(loaded_config, popen_mock)
+    creds = await provider.load()
+    await creds.get_frozen_credentials()
+    assert creds is not None
+    assert creds.access_key == 'foo2'
+    assert creds.secret_key == 'bar2'
+    assert creds.token == 'baz2'
+    assert creds.method == 'custom-process'
 
-#         provider = self.create_process_provider()
-#         exception = botocore.exceptions.CredentialRetrievalError
-#         with self.assertRaisesRegexp(exception, 'Missing required key'):
-#             provider.load()
 
-#     def test_missing_session_token(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value({
-#             'Version': 1,
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             # Missing session token.
-#             'Expiration': '2020-01-01T00:00:00Z',
-#         })
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_non_zero_rc_raises_exception(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, '', 'Error Message', 1)
 
-#         provider = self.create_process_provider()
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertIsNone(creds.token)
-#         self.assertEqual(creds.method, 'custom-process')
+    provider = create_process_provider(loaded_config, popen_mock)
+    exception = botocore.exceptions.CredentialRetrievalError
+    with pytest.raises(exception) as excinfo:
+        await provider.load()
+    assert 'Error Message' in str(excinfo.value)
 
-#     def test_missing_expiration(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value({
-#             'Version': 1,
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             'SessionToken': 'baz',
-#             # Missing expiration.
-#         })
 
-#         provider = self.create_process_provider()
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertEqual(creds.token, 'baz')
-#         self.assertEqual(creds.method, 'custom-process')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_unsupported_version_raises_mismatch(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    bad_version = 100
+    _set_process_return_value(invoked_process, {
+        'Version': bad_version,
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        'SessionToken': 'baz',
+        'Expiration': '2020-01-01T00:00:00Z',
+    })
 
-#     def test_missing_expiration_and_session_token(self):
-#         self.loaded_config['profiles'] = {
-#             'default': {'credential_process': 'my-process'}
-#         }
-#         self._set_process_return_value({
-#             'Version': 1,
-#             'AccessKeyId': 'foo',
-#             'SecretAccessKey': 'bar',
-#             # Missing session token and expiration
-#         })
+    provider = create_process_provider(loaded_config, popen_mock)
+    exception = botocore.exceptions.CredentialRetrievalError
+    with pytest.raises(exception) as excinfo:
+        await provider.load()
+    assert 'Unsupported version' in str(excinfo.value)
 
-#         provider = self.create_process_provider()
-#         creds = provider.load()
-#         self.assertIsNotNone(creds)
-#         self.assertEqual(creds.access_key, 'foo')
-#         self.assertEqual(creds.secret_key, 'bar')
-#         self.assertIsNone(creds.token)
-#         self.assertEqual(creds.method, 'custom-process')
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_missing_version_in_payload_returned_raises_exception(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, {
+        # Let's say they forget a 'Version' key.
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        'SessionToken': 'baz',
+        'Expiration': '2020-01-01T00:00:00Z',
+    })
+
+    provider = create_process_provider(loaded_config, popen_mock)
+    exception = botocore.exceptions.CredentialRetrievalError
+    with pytest.raises(exception) as excinfo:
+        await provider.load()
+    assert 'Unsupported version' in str(excinfo.value)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_missing_access_key_raises_exception(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, {
+        'Version': 1,
+        # Missing access key.
+        'SecretAccessKey': 'bar',
+        'SessionToken': 'baz',
+        'Expiration': '2020-01-01T00:00:00Z',
+    })
+
+    provider = create_process_provider(loaded_config, popen_mock)
+    exception = botocore.exceptions.CredentialRetrievalError
+    with pytest.raises(exception) as excinfo:
+        await provider.load()
+
+    assert 'Missing required key' in str(excinfo.value)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_missing_secret_key_raises_exception(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, {
+        'Version': 1,
+        'AccessKeyId': 'foo',
+        # Missing secret key.
+        'SessionToken': 'baz',
+        'Expiration': '2020-01-01T00:00:00Z',
+    })
+
+    provider = create_process_provider(loaded_config, popen_mock)
+    exception = botocore.exceptions.CredentialRetrievalError
+    with pytest.raises(exception) as excinfo:
+        await provider.load()
+    assert 'Missing required key' in str(excinfo.value)
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_missing_session_token(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, {
+        'Version': 1,
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        # Missing session token.
+        'Expiration': '2020-01-01T00:00:00Z',
+    })
+
+    provider = create_process_provider(loaded_config, popen_mock)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token is None
+    assert creds.method == 'custom-process'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_missing_expiration(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, {
+        'Version': 1,
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        'SessionToken': 'baz',
+        # Missing expiration.
+    })
+
+    provider = create_process_provider(loaded_config, popen_mock)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token == 'baz'
+    assert creds.method == 'custom-process'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_missing_expiration_and_session_token(loaded_config, popen_mock, invoked_process):
+    loaded_config['profiles'] = {
+        'default': {'credential_process': 'my-process'}
+    }
+    _set_process_return_value(invoked_process, {
+        'Version': 1,
+        'AccessKeyId': 'foo',
+        'SecretAccessKey': 'bar',
+        # Missing session token and expiration
+    })
+
+    provider = create_process_provider(loaded_config, popen_mock)
+    creds = await provider.load()
+    assert creds is not None
+    assert creds.access_key == 'foo'
+    assert creds.secret_key == 'bar'
+    assert creds.token is None
+    assert creds.method == 'custom-process'
