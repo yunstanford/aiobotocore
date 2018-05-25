@@ -2782,163 +2782,190 @@ async def test_refresh_giving_expired_credentials_raises_exception():
     assert err_msg in str(excinfo.value)
 
 
-# class TestContainerProvider(BaseEnvVar):
-#     def test_noop_if_env_var_is_not_set(self):
-#         # The 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI' env var
-#         # is not present as an env var.
-#         environ = {}
-#         provider = credentials.ContainerProvider(environ)
-#         creds = provider.load()
-#         self.assertIsNone(creds)
+###############################
+# class TestContainerProvider #
+###############################
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_noop_if_env_var_is_not_set():
+    # The 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI' env var
+    # is not present as an env var.
+    environ = {}
+    provider = credentials.ContainerProvider(environ)
+    creds = await provider.load()
+    assert creds is None
 
-#     def full_url(self, url):
-#         return 'http://%s%s' % (ContainerMetadataFetcher.IP_ADDRESS, url)
 
-#     def create_fetcher(self):
-#         fetcher = mock.Mock(spec=ContainerMetadataFetcher)
-#         fetcher.full_url = self.full_url
-#         return fetcher
+def full_url(url):
+    return 'http://%s%s' % (ContainerMetadataFetcher.IP_ADDRESS, url)
 
-#     def test_retrieve_from_provider_if_env_var_present(self):
-#         environ = {
-#             'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
-#         }
-#         fetcher = self.create_fetcher()
-#         timeobj = datetime.now(tzlocal())
-#         timestamp = (timeobj + timedelta(hours=24)).isoformat()
-#         fetcher.retrieve_full_uri.return_value = {
-#             "AccessKeyId" : "access_key",
-#             "SecretAccessKey" : "secret_key",
-#             "Token" : "token",
-#             "Expiration" : timestamp,
-#         }
-#         provider = credentials.ContainerProvider(environ, fetcher)
-#         creds = provider.load()
 
-#         fetcher.retrieve_full_uri.assert_called_with(
-#             self.full_url('/latest/credentials?id=foo'), headers=None)
-#         self.assertEqual(creds.access_key, 'access_key')
-#         self.assertEqual(creds.secret_key, 'secret_key')
-#         self.assertEqual(creds.token, 'token')
-#         self.assertEqual(creds.method, 'container-role')
+def create_fetcher():
+    fetcher = mock.Mock(spec=ContainerMetadataFetcher)
+    fetcher.full_url = full_url
+    return fetcher
 
-#     def test_creds_refresh_when_needed(self):
-#         environ = {
-#             'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
-#         }
-#         fetcher = mock.Mock(spec=credentials.ContainerMetadataFetcher)
-#         timeobj = datetime.now(tzlocal())
-#         expired_timestamp = (timeobj - timedelta(hours=23)).isoformat()
-#         future_timestamp = (timeobj + timedelta(hours=1)).isoformat()
-#         fetcher.retrieve_full_uri.side_effect = [
-#             {
-#                 "AccessKeyId" : "access_key_old",
-#                 "SecretAccessKey" : "secret_key_old",
-#                 "Token" : "token_old",
-#                 "Expiration" : expired_timestamp,
-#             },
-#             {
-#                 "AccessKeyId" : "access_key_new",
-#                 "SecretAccessKey" : "secret_key_new",
-#                 "Token" : "token_new",
-#                 "Expiration" : future_timestamp,
-#             }
-#         ]
-#         provider = credentials.ContainerProvider(environ, fetcher)
-#         creds = provider.load()
-#         frozen_creds = creds.get_frozen_credentials()
-#         self.assertEqual(frozen_creds.access_key, 'access_key_new')
-#         self.assertEqual(frozen_creds.secret_key, 'secret_key_new')
-#         self.assertEqual(frozen_creds.token, 'token_new')
 
-#     def test_http_error_propagated(self):
-#         environ = {
-#             'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
-#         }
-#         fetcher = mock.Mock(spec=credentials.ContainerMetadataFetcher)
-#         timeobj = datetime.now(tzlocal())
-#         expired_timestamp = (timeobj - timedelta(hours=23)).isoformat()
-#         future_timestamp = (timeobj + timedelta(hours=1)).isoformat()
-#         exception = botocore.exceptions.CredentialRetrievalError
-#         fetcher.retrieve_full_uri.side_effect = exception(provider='ecs-role',
-#                                                      error_msg='fake http error')
-#         with self.assertRaises(exception):
-#             provider = credentials.ContainerProvider(environ, fetcher)
-#             creds = provider.load()
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_retrieve_from_provider_if_env_var_present():
+    environ = {
+        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
+    }
+    fetcher = create_fetcher()
+    timeobj = datetime.now(tzlocal())
+    timestamp = (timeobj + timedelta(hours=24)).isoformat()
+    fetcher.retrieve_full_uri = asynctest.CoroutineMock(return_value={
+        "AccessKeyId" : "access_key",
+        "SecretAccessKey" : "secret_key",
+        "Token" : "token",
+        "Expiration" : timestamp,
+    })
+    provider = credentials.ContainerProvider(environ, fetcher)
+    creds = await provider.load()
 
-#     def test_http_error_propagated_on_refresh(self):
-#         # We should ensure errors are still propagated even in the
-#         # case of a failed refresh.
-#         environ = {
-#             'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
-#         }
-#         fetcher = mock.Mock(spec=credentials.ContainerMetadataFetcher)
-#         timeobj = datetime.now(tzlocal())
-#         expired_timestamp = (timeobj - timedelta(hours=23)).isoformat()
-#         http_exception = botocore.exceptions.MetadataRetrievalError
-#         raised_exception = botocore.exceptions.CredentialRetrievalError
-#         fetcher.retrieve_full_uri.side_effect = [
-#             {
-#                 "AccessKeyId" : "access_key_old",
-#                 "SecretAccessKey" : "secret_key_old",
-#                 "Token" : "token_old",
-#                 "Expiration" : expired_timestamp,
-#             },
-#             http_exception(error_msg='HTTP connection timeout')
-#         ]
-#         provider = credentials.ContainerProvider(environ, fetcher)
-#         # First time works with no issues.
-#         creds = provider.load()
-#         # Second time with a refresh should propagate an error.
-#         with self.assertRaises(raised_exception):
-#             frozen_creds = creds.get_frozen_credentials()
+    fetcher.retrieve_full_uri.assert_called_with(
+        full_url('/latest/credentials?id=foo'), headers=None)
+    assert creds.access_key == 'access_key'
+    assert creds.secret_key == 'secret_key'
+    assert creds.token == 'token'
+    assert creds.method == 'container-role'
 
-#     def test_can_use_full_url(self):
-#         environ = {
-#             'AWS_CONTAINER_CREDENTIALS_FULL_URI': 'http://localhost/foo'
-#         }
-#         fetcher = self.create_fetcher()
-#         timeobj = datetime.now(tzlocal())
-#         timestamp = (timeobj + timedelta(hours=24)).isoformat()
-#         fetcher.retrieve_full_uri.return_value = {
-#             "AccessKeyId" : "access_key",
-#             "SecretAccessKey" : "secret_key",
-#             "Token" : "token",
-#             "Expiration" : timestamp,
-#         }
-#         provider = credentials.ContainerProvider(environ, fetcher)
-#         creds = provider.load()
 
-#         fetcher.retrieve_full_uri.assert_called_with('http://localhost/foo',
-#                                                      headers=None)
-#         self.assertEqual(creds.access_key, 'access_key')
-#         self.assertEqual(creds.secret_key, 'secret_key')
-#         self.assertEqual(creds.token, 'token')
-#         self.assertEqual(creds.method, 'container-role')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_creds_refresh_when_needed():
+    environ = {
+        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
+    }
+    fetcher = mock.Mock(spec=credentials.ContainerMetadataFetcher)
+    timeobj = datetime.now(tzlocal())
+    expired_timestamp = (timeobj - timedelta(hours=23)).isoformat()
+    future_timestamp = (timeobj + timedelta(hours=1)).isoformat()
+    fetcher.retrieve_full_uri = asynctest.CoroutineMock(side_effect=[
+        {
+            "AccessKeyId" : "access_key_old",
+            "SecretAccessKey" : "secret_key_old",
+            "Token" : "token_old",
+            "Expiration" : expired_timestamp,
+        },
+        {
+            "AccessKeyId" : "access_key_new",
+            "SecretAccessKey" : "secret_key_new",
+            "Token" : "token_new",
+            "Expiration" : future_timestamp,
+        }
+    ])
+    provider = credentials.ContainerProvider(environ, fetcher)
+    creds = await provider.load()
+    frozen_creds = await creds.get_frozen_credentials()
+    assert frozen_creds.access_key == 'access_key_new'
+    assert frozen_creds.secret_key == 'secret_key_new'
+    assert frozen_creds.token == 'token_new'
 
-#     def test_can_pass_basic_auth_token(self):
-#         environ = {
-#             'AWS_CONTAINER_CREDENTIALS_FULL_URI': 'http://localhost/foo',
-#             'AWS_CONTAINER_AUTHORIZATION_TOKEN': 'Basic auth-token',
-#         }
-#         fetcher = self.create_fetcher()
-#         timeobj = datetime.now(tzlocal())
-#         timestamp = (timeobj + timedelta(hours=24)).isoformat()
-#         fetcher.retrieve_full_uri.return_value = {
-#             "AccessKeyId" : "access_key",
-#             "SecretAccessKey" : "secret_key",
-#             "Token" : "token",
-#             "Expiration" : timestamp,
-#         }
-#         provider = credentials.ContainerProvider(environ, fetcher)
-#         creds = provider.load()
 
-#         fetcher.retrieve_full_uri.assert_called_with(
-#             'http://localhost/foo', headers={'Authorization': 'Basic auth-token'})
-#         self.assertEqual(creds.access_key, 'access_key')
-#         self.assertEqual(creds.secret_key, 'secret_key')
-#         self.assertEqual(creds.token, 'token')
-#         self.assertEqual(creds.method, 'container-role')
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_http_error_propagated():
+    environ = {
+        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
+    }
+    fetcher = mock.Mock(spec=credentials.ContainerMetadataFetcher)
+    timeobj = datetime.now(tzlocal())
+    expired_timestamp = (timeobj - timedelta(hours=23)).isoformat()
+    future_timestamp = (timeobj + timedelta(hours=1)).isoformat()
+    exception = botocore.exceptions.CredentialRetrievalError
+    fetcher.retrieve_full_uri = asynctest.CoroutineMock(side_effect=exception(provider='ecs-role',
+                                                 error_msg='fake http error'))
+    with pytest.raises(exception):
+        provider = credentials.ContainerProvider(environ, fetcher)
+        creds = await provider.load()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_http_error_propagated_on_refresh():
+    # We should ensure errors are still propagated even in the
+    # case of a failed refresh.
+    environ = {
+        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
+    }
+    fetcher = mock.Mock(spec=credentials.ContainerMetadataFetcher)
+    timeobj = datetime.now(tzlocal())
+    expired_timestamp = (timeobj - timedelta(hours=23)).isoformat()
+    http_exception = botocore.exceptions.MetadataRetrievalError
+    raised_exception = botocore.exceptions.CredentialRetrievalError
+    fetcher.retrieve_full_uri = asynctest.CoroutineMock(side_effect=[
+        {
+            "AccessKeyId" : "access_key_old",
+            "SecretAccessKey" : "secret_key_old",
+            "Token" : "token_old",
+            "Expiration" : expired_timestamp,
+        },
+        http_exception(error_msg='HTTP connection timeout')
+    ])
+    provider = credentials.ContainerProvider(environ, fetcher)
+    # First time works with no issues.
+    creds = await provider.load()
+    # Second time with a refresh should propagate an error.
+    with pytest.raises(raised_exception):
+        frozen_creds = await creds.get_frozen_credentials()
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_use_full_url():
+    environ = {
+        'AWS_CONTAINER_CREDENTIALS_FULL_URI': 'http://localhost/foo'
+    }
+    fetcher = create_fetcher()
+    timeobj = datetime.now(tzlocal())
+    timestamp = (timeobj + timedelta(hours=24)).isoformat()
+    fetcher.retrieve_full_uri = asynctest.CoroutineMock(return_value={
+        "AccessKeyId" : "access_key",
+        "SecretAccessKey" : "secret_key",
+        "Token" : "token",
+        "Expiration" : timestamp,
+    })
+    provider = credentials.ContainerProvider(environ, fetcher)
+    creds = await provider.load()
+
+    fetcher.retrieve_full_uri.assert_called_with('http://localhost/foo',
+                                                 headers=None)
+    assert creds.access_key == 'access_key'
+    assert creds.secret_key == 'secret_key'
+    assert creds.token == 'token'
+    assert creds.method == 'container-role'
+
+
+@pytest.mark.moto
+@pytest.mark.asyncio
+async def test_can_pass_basic_auth_token():
+    environ = {
+        'AWS_CONTAINER_CREDENTIALS_FULL_URI': 'http://localhost/foo',
+        'AWS_CONTAINER_AUTHORIZATION_TOKEN': 'Basic auth-token',
+    }
+    fetcher = create_fetcher()
+    timeobj = datetime.now(tzlocal())
+    timestamp = (timeobj + timedelta(hours=24)).isoformat()
+    fetcher.retrieve_full_uri = asynctest.CoroutineMock(return_value={
+        "AccessKeyId" : "access_key",
+        "SecretAccessKey" : "secret_key",
+        "Token" : "token",
+        "Expiration" : timestamp,
+    })
+    provider = credentials.ContainerProvider(environ, fetcher)
+    creds = await provider.load()
+
+    fetcher.retrieve_full_uri.assert_called_with(
+        'http://localhost/foo', headers={'Authorization': 'Basic auth-token'})
+    assert creds.access_key == 'access_key'
+    assert creds.secret_key == 'secret_key'
+    assert creds.token == 'token'
+    assert creds.method == 'container-role'
+
+
+
 
 
 # class TestProcessProvider(BaseEnvVar):

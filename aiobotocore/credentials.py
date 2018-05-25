@@ -1507,16 +1507,16 @@ class ContainerProvider(CredentialProvider):
         # This cred provider is only triggered if the self.ENV_VAR is set,
         # which only happens if you opt into this feature.
         if self.ENV_VAR in self._environ or self.ENV_VAR_FULL in self._environ:
-            return self._retrieve_or_fail()
+            return await self._retrieve_or_fail()
 
-    def _retrieve_or_fail(self):
+    async def _retrieve_or_fail(self):
         if self._provided_relative_uri():
             full_uri = self._fetcher.full_url(self._environ[self.ENV_VAR])
         else:
             full_uri = self._environ[self.ENV_VAR_FULL]
         headers = self._build_headers()
         fetcher = self._create_fetcher(full_uri, headers)
-        creds = fetcher()
+        creds = await fetcher()
         return RefreshableCredentials(
             access_key=creds['access_key'],
             secret_key=creds['secret_key'],
